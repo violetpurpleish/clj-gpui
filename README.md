@@ -1,6 +1,6 @@
 # clj-gpui
 
-[![CI](https://github.com/gitwyrm/clj-gpui/actions/workflows/ci.yml/badge.svg)](https://github.com/gitwyrm/clj-gpui/actions/workflows/ci.yml)
+[![CI](https://github.com/violetpurpleish/clj-gpui/actions/workflows/ci.yml/badge.svg)](https://github.com/violetpurpleish/clj-gpui/actions/workflows/ci.yml)
 
 A library for writing **native GPUI applications in real Clojure**.
 
@@ -488,7 +488,7 @@ Define a custom palette as JVM Clojure data (GPUI Kit color tokens such as `:pri
 ;; or {:theme "Mine"} to follow OS light/dark within this pair
 ```
 
-See `examples/themes/catppuccin-violet` for a full pair ported from [utility_belt_gpui](https://github.com/gitwyrm/utility_belt_gpui) `src/theme.rs` (MIT OR Apache-2.0). That crate is not a runtime dependency.
+See `examples/themes/catppuccin-violet` for a full pair ported from [utility_belt_gpui](https://github.com/violetpurpleish/utility_belt_gpui) `src/theme.rs` (MIT OR Apache-2.0). That crate is not a runtime dependency.
 
 JSON still works: put extra theme-set files (same schema as [GPUI Kit themes](https://gpui-kit.com)) in `./themes` or `$CLJ_GPUI_THEMES`. Those override bundled names. Clojure-registered sets override JSON. Hex `:bg` / `:color` still win on that node when you set them.
 
