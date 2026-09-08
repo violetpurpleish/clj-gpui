@@ -145,7 +145,9 @@
        :align :center}
       (ui/label "todos" {:font-size 80
                          :font-weight :thin
-                         :font-family ".SystemUIFont"
+                         ;; GPUI's macOS raster bounds scale a 16px font;
+                         ;; the system font's optical sizing clips curves at 80px.
+                         :font-family "Helvetica Neue"
                          :color title-color})
       (ui/vstack
        {:width 550 :bg card-bg :shadow true}
