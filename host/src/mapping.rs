@@ -349,7 +349,10 @@ fn kit_label_spec(node: &Node) -> KitLabelSpec {
 /// Kit `Label`: main text plus optional secondary, mask, and highlights.
 pub fn kit_label(node: &Node) -> Label {
     let spec = kit_label_spec(node);
-    let mut label = Label::new(spec.text);
+    // Kit defaults to 1.25rem, which reserves a body-sized line even for
+    // large headings. Resolve against the label's own (possibly inherited)
+    // font size so adjacent stack children cannot paint over its glyphs.
+    let mut label = Label::new(spec.text).line_height(gpui::relative(1.25));
     if let Some(secondary) = spec.secondary {
         label = label.secondary(secondary);
     }
@@ -1527,6 +1530,26 @@ mod tests {
     use super::*;
     use gpui_component::Sizable;
     use serde_json::json;
+
+    #[test]
+    fn label_line_box_scales_with_font_instead_of_window_rem() {
+        for font_size in [11.0, 22.0, 80.0] {
+            let node = Node {
+                kind: "label".into(),
+                text: Some("todos".into()),
+                font_size: Some(font_size),
+                ..Node::default()
+            };
+            let mut label = apply_visual_style(kit_label(&node), &node);
+            let line_height = label.text_style().line_height.unwrap();
+            for rem_size in [14.0, 16.0, 20.0] {
+                assert_eq!(
+                    line_height.to_pixels(px(font_size).into(), px(rem_size)),
+                    px(font_size * 1.25)
+                );
+            }
+        }
+    }
 
     #[test]
     fn scale_keywords() {
