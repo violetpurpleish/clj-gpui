@@ -2,6 +2,8 @@
 
 Status: **Kit 0.6 migration landed** on `main` ([PR #13](https://github.com/gitwyrm/clj-gpui/pull/13), `4fcf02e`). Phase 5 (declarative `ui/table`, Combobox / Rating / Stepper, `gpui-fps`, protocol 9) landed in [PR #14](https://github.com/gitwyrm/clj-gpui/pull/14). Extra Kit chart kinds (horizontal `BarChart` alignment, radar, candlestick, sankey) are protocol 10. NativeMenu / Command / StatusBar and nested menu/command path-vector parent callbacks are protocol 11.
 
+The implemented 0.6.1 follow-up, validation results, and remaining deeper test inventory are tracked in [gpui-kit-0.6.1-todo.md](gpui-kit-0.6.1-todo.md).
+
 Upstream: [GPUI Kit v0.6.0](https://github.com/longbridge/gpui-kit/releases/tag/v0.6.0) (2026-09-03). Docs: [gpui-kit.com](https://gpui-kit.com). Source: [longbridge/gpui-kit](https://github.com/longbridge/gpui-kit) tag `v0.6.0`.
 
 This document is the course of action for moving clj-gpui off **gpui-component 0.5.1 + crates.io `gpui` 0.2.2** onto **GPUI Kit 0.6**. Decisions are locked in [§11](#11-decisions).

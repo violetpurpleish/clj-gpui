@@ -755,7 +755,7 @@ pub fn apply_button_chrome(mut button: Button, node: &Node, cx: Option<&App>) ->
     if node.disabled {
         button = button.disabled(true);
     }
-    if let Some(icon) = node.icon.as_deref().and_then(parse_icon) {
+    if let Some(icon) = icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref()) {
         button = button.icon(icon);
     }
     if node.loading {
@@ -766,6 +766,9 @@ pub fn apply_button_chrome(mut button: Button, node: &Node, cx: Option<&App>) ->
     }
     if let Some(tooltip) = node.tooltip.as_deref().filter(|s| !s.is_empty()) {
         button = button.tooltip(tooltip.to_string());
+    }
+    if let Some(placement) = parse_optional_placement(node.tooltip_placement.as_deref()) {
+        button = button.tooltip_placement(placement);
     }
     if let Some(rounded) = parse_button_rounded(node.rounded.as_ref()) {
         button = button.rounded(rounded);
@@ -882,7 +885,7 @@ pub fn apply_alert_chrome(mut alert: Alert, node: &Node) -> Alert {
         alert = alert.title(title);
     }
     alert = alert.with_size(parse_scale(node.control_size.as_deref()));
-    if let Some(icon) = node.icon.as_deref().and_then(parse_icon) {
+    if let Some(icon) = icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref()) {
         alert = alert.icon(icon);
     }
     if node.banner {
@@ -916,7 +919,7 @@ pub fn apply_progress_chrome(mut progress: Progress, node: &Node) -> Progress {
 
 /// Kit `Badge` chrome (icon / dot / count, max, color, size).
 pub fn apply_badge_chrome(mut badge: Badge, node: &Node) -> Badge {
-    if let Some(icon) = node.icon.as_deref().and_then(parse_icon) {
+    if let Some(icon) = icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref()) {
         badge = badge.icon(icon);
     } else if node.dot {
         badge = badge.dot();
@@ -965,7 +968,7 @@ fn skeleton_secondary(node: &Node) -> bool {
 /// Kit `Spinner` chrome (size, icon, color).
 pub fn apply_spinner_chrome(mut spinner: Spinner, node: &Node) -> Spinner {
     spinner = spinner.with_size(parse_scale(node.control_size.as_deref()));
-    if let Some(icon) = node.icon.as_deref().and_then(parse_icon) {
+    if let Some(icon) = icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref()) {
         spinner = spinner.icon(icon);
     }
     if let Some(color) = parse_hex(node.color.as_deref()) {
@@ -1082,6 +1085,18 @@ pub fn parse_placement(value: Option<&str>, default: Placement) -> Placement {
         Some(name) if name == "bottom" => Placement::Bottom,
         Some(name) if name == "right" => Placement::Right,
         _ => default,
+    }
+}
+
+/// Optional Kit placement. Invalid values are omitted so callers retain their
+/// component's own automatic/default placement policy.
+pub fn parse_optional_placement(value: Option<&str>) -> Option<Placement> {
+    match value.map(catalog::normalize).as_deref() {
+        Some("left") => Some(Placement::Left),
+        Some("top") => Some(Placement::Top),
+        Some("bottom") => Some(Placement::Bottom),
+        Some("right") => Some(Placement::Right),
+        _ => None,
     }
 }
 
@@ -1290,6 +1305,31 @@ pub fn parse_icon(name: &str) -> Option<IconName> {
         "window restore" => Some(IconName::WindowRestore),
         _ => None,
     }
+}
+
+/// Build one Kit icon from the wire representation. UTF-8 SVG is explicit and
+/// wins over a bundled keyword/name; malformed content is ignored safely.
+pub fn icon_from_parts(name: Option<&str>, svg: Option<&str>) -> Option<Icon> {
+    if let Some(svg) = svg.filter(|source| is_svg_source(source)) {
+        return Some(Icon::default().data(svg.as_bytes()));
+    }
+    let name = name?;
+    if let Some(icon) = parse_icon(name) {
+        return Some(Icon::new(icon));
+    }
+    let wanted = format!("icons/{}.svg", catalog::normalize(name).replace(' ', "-"));
+    gpui::assets::IconName::ALL
+        .iter()
+        .copied()
+        .find(|icon| icon.path().as_ref() == wanted)
+        .map(Icon::new)
+}
+
+fn is_svg_source(source: &str) -> bool {
+    let source = source.trim_start_matches('\u{feff}').trim_start();
+    let has_svg_root = source.starts_with("<svg")
+        || (source.starts_with("<?xml") && source.find("<svg").is_some());
+    has_svg_root && (source.contains("</svg>") || source.trim_end().ends_with("/>"))
 }
 
 /// Kit `InputContentType` from a kebab / space name. `email` is
@@ -2628,5 +2668,27 @@ mod tests {
             }),
             1
         );
+    }
+
+    #[test]
+    fn optional_placement_preserves_component_default_for_invalid_values() {
+        assert_eq!(parse_optional_placement(Some("top")), Some(Placement::Top));
+        assert_eq!(
+            parse_optional_placement(Some("RIGHT")),
+            Some(Placement::Right)
+        );
+        assert_eq!(parse_optional_placement(Some("auto")), None);
+        assert_eq!(parse_optional_placement(None), None);
+    }
+
+    #[test]
+    fn icon_wire_supports_full_catalog_and_utf8_inline_svg() {
+        assert!(icon_from_parts(Some("accessibility"), None).is_some());
+        assert!(icon_from_parts(None, Some("  <svg><text>λ</text></svg>")).is_some());
+        assert!(icon_from_parts(None, Some("<svg viewBox='0 0 1 1'/>")).is_some());
+        assert!(icon_from_parts(Some("check"), Some("not svg")).is_some());
+        assert!(icon_from_parts(Some("check"), Some("<svg><path>broken")).is_some());
+        assert!(icon_from_parts(None, Some("<svg><path>broken")).is_none());
+        assert!(icon_from_parts(None, Some("not svg")).is_none());
     }
 }

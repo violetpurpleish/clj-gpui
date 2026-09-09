@@ -1,5 +1,6 @@
 /host/target
 /target
+**/target
 **/.cpcache
 **/.nrepl-port
 **/.DS_Store

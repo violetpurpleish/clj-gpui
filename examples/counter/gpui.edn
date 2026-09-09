@@ -1,0 +1,6 @@
+{:name "counter"
+ :version "0.1.0"
+ :main counter.app/app
+ :id "com.violetpurpleish.clj-gpui.counter"
+ :title "Counter"
+ :description "The clj-gpui counter example"}

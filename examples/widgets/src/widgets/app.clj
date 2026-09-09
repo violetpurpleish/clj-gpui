@@ -149,7 +149,9 @@
    (example "ui/button · loading icon caret" "Kit loading, icon-only, rounded, and dropdown caret."
             (ui/hstack {:gap 12 :align :center}
                        (ui/button "Saving" {:loading true :primary true})
-                       (ui/button "" {:icon :inbox :tooltip "Inbox" :accessibility-label "Inbox"})
+                       (ui/button "" {:icon :accessibility :tooltip "Accessibility"
+                                      :tooltip-placement :right
+                                      :accessibility-label "Accessibility"})
                        (ui/button "More" {:icon :chevron-down :dropdown-caret true :rounded :none})))
    (example "ui/switch" "A boolean value and an on-change callback."
             (ui/switch notify? (set-key :notify?) "Notifications"))
@@ -376,7 +378,9 @@
                        (ui/badge 3 (ui/icon :bell))
                        (ui/badge {:dot true} (ui/icon :inbox))
                        (ui/badge {:count 120 :max 99 :color "#3366ff"} (ui/icon :bell))
-                       (ui/badge {:icon :check :color "#22c55e"} (ui/icon :user))))
+                       (ui/badge {:icon :check :color "#22c55e"} (ui/icon :user))
+                       (ui/icon nil {:size 20
+                                     :icon-svg "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='none' stroke='currentColor' stroke-width='2' d='M4 12h16M12 4v16'/></svg>"})))
    (example "ui/spinner" "A compact loading indicator."
             (ui/hstack {:gap 16 :align :center}
                        (ui/spinner {:size :small})
@@ -491,7 +495,6 @@
                        {:id :link :label "Copy link"}]}]
              {:id "gallery-native"
               :open? native-menu?
-              :position [24 160]
               :on-change (fn [id]
                            (swap! !state (fn [s]
                                            (cond-> (assoc s :menu id)
@@ -823,15 +826,17 @@
 (defn- text-panel [{:keys [src]}]
   (ui/vstack
    {:gap 24}
-   (example "ui/editor" "Editable Clojure source with syntax highlighting."
-            (ui/editor src {:id "src" :language "clojure" :height 160 :on-change (set-key :src)}))))
+   (example "ui/editor" "Clojure highlighting, auto-pairs/smart indent, and native multi-cursor editing."
+            (ui/editor src {:id "src" :language "clojure" :height 160
+                            :auto-close true :smart-indent true
+                            :on-change (set-key :src)}))))
 
 (defn- markdown-panel [_]
   (ui/vstack
    {:gap 24}
-   (example "ui/markdown" "Render formatted, selectable text."
-            (ui/markdown "# Markdown\n\nSelectable **GPUI Kit** `TextView`.\n\n- sheet\n- notification\n- charts"
-                         {:height 140 :selectable true}))))
+   (example "ui/markdown" "Render formatted text with opt-in YAML frontmatter."
+            (ui/markdown "---\ntitle: Widget gallery\ntags: [clojure, gpui]\n---\n# Markdown\n\nSelectable **GPUI Kit** `TextView`.  \nWith a hard break and `inline code`."
+                         {:height 180 :selectable true :frontmatter true}))))
 
 (defn- structure-panel [{:keys [section alert?]}]
   (ui/vstack
@@ -1000,7 +1005,9 @@
   (ui/vstack
    {:gap 24}
    (example "ui/sidebar" "The gallery navigation is itself a ui/sidebar."
-            (ui/sidebar [{:id :home :label "Home" :icon :check}
+            (ui/sidebar [{:id :home :label "Home" :icon :check
+                          :style {:bg "#20263b" :padding 6}
+                          :label-style {:font-weight :bold :color "#c0caf5"}}
                          {:id :files :label "Files" :icon :folder}
                          {:id :gear :label "Settings" :icon :settings}]
                         {:selected nav

@@ -1,0 +1,6 @@
+{:name "catppuccin-violet"
+ :version "0.1.0"
+ :main catppuccin-violet.app/app
+ :id "com.violetpurpleish.clj-gpui.catppuccin-violet"
+ :title "Catppuccin Violet"
+ :description "A custom clj-gpui theme example"}

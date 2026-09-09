@@ -77,7 +77,7 @@ pub fn kit_avatar(node: &Node) -> Avatar {
     if let Some(src) = node.src.as_deref().filter(|s| !s.is_empty()) {
         avatar = avatar.src(src.to_string());
     }
-    if let Some(icon) = node.icon.as_deref().and_then(mapping::parse_icon) {
+    if let Some(icon) = mapping::icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref()) {
         avatar = avatar.placeholder(icon);
     }
     avatar
@@ -648,7 +648,9 @@ pub fn fill_popup_menu(
             if item.disabled {
                 entry = entry.disabled(true);
             }
-            if let Some(icon) = item.icon.as_deref().and_then(mapping::parse_icon) {
+            if let Some(icon) =
+                mapping::icon_from_parts(item.icon.as_deref(), item.icon_svg.as_deref())
+            {
                 entry = entry.icon(icon);
             }
             menu = menu.item(entry);
@@ -663,7 +665,8 @@ pub fn fill_popup_menu(
         if item.checked.unwrap_or(false) {
             entry = entry.checked(true);
         }
-        if let Some(icon) = item.icon.as_deref().and_then(mapping::parse_icon) {
+        if let Some(icon) = mapping::icon_from_parts(item.icon.as_deref(), item.icon_svg.as_deref())
+        {
             entry = entry.icon(icon);
         }
         let emit = emit.clone();
@@ -920,8 +923,9 @@ fn paint_static_tree(
         }
         "icon" => {
             let name = node.icon.as_deref().or(node.text.as_deref()).unwrap_or("");
-            let icon = mapping::parse_icon(name).unwrap_or(IconName::Asterisk);
-            chart_layout(Icon::new(icon), node).into_any_element()
+            let icon = mapping::icon_from_parts(Some(name), node.icon_svg.as_deref())
+                .unwrap_or_else(|| Icon::new(IconName::Asterisk));
+            chart_layout(icon, node).into_any_element()
         }
         "clipboard" => {
             let clip = Clipboard::new(SharedString::from(path.to_string()))
@@ -1171,8 +1175,9 @@ fn paint_static_node(
         "separator" => gpui_component::separator::Separator::horizontal().into_any_element(),
         "icon" => {
             let name = node.icon.as_deref().or(node.text.as_deref()).unwrap_or("");
-            let icon = mapping::parse_icon(name).unwrap_or(IconName::Asterisk);
-            Icon::new(icon).into_any_element()
+            mapping::icon_from_parts(Some(name), node.icon_svg.as_deref())
+                .unwrap_or_else(|| Icon::new(IconName::Asterisk))
+                .into_any_element()
         }
         _ => div()
             .id(SharedString::from(path.to_string()))
@@ -1366,21 +1371,34 @@ pub fn bind_alert_dialog_callbacks(
     alert: AlertDialog,
     key: String,
     emit: ActionEmitter,
-    close: Rc<RefCell<DialogClose>>,
 ) -> AlertDialog {
+    // AlertDialog keeps action callbacks on its own button props but keeps
+    // `on_close` on the embedded Dialog. `build_surface` replaces the latter
+    // props with the former, so a direct WindowExt alert loses an `on_close`
+    // installed here. Emit the already-batched logical close from the native
+    // OK/Cancel action instead. Backdrop, Escape and X all run Cancel first.
+    let cancel_key = key.clone();
+    let cancel_emit = emit.clone();
     alert
-        .on_ok({
-            let close = close.clone();
-            move |_, _, _| close.borrow_mut().action(true)
+        .on_ok(move |_, _, cx| {
+            emit(
+                QueuedAction::DialogClose {
+                    key: key.clone(),
+                    ok: Some(true),
+                },
+                cx,
+            );
+            true
         })
-        .on_cancel({
-            let close = close.clone();
-            move |_, _, _| close.borrow_mut().action(false)
-        })
-        .on_close(move |_, _, cx| {
-            if let Some(action) = close.borrow_mut().take(&key) {
-                emit(action, cx);
-            }
+        .on_cancel(move |_, _, cx| {
+            cancel_emit(
+                QueuedAction::DialogClose {
+                    key: cancel_key.clone(),
+                    ok: Some(false),
+                },
+                cx,
+            );
+            true
         })
 }
 

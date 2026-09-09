@@ -6,7 +6,7 @@ A library for writing **native GPUI applications in real Clojure**.
 
 This is not a Clojure-like language, a Lisp-inspired DSL, or a toy interpreter. Application code is ordinary JVM Clojure: `def`, `defn`, `defonce`, atoms, `#()`, `map`, macros, namespaces. Rust owns the GPUI window and translates Clojure data into native [GPUI Kit](https://gpui-kit.com) widgets.
 
-There is no Clojars release yet. Depend on this repo with `:local/root` or a git SHA. GitHub Actions runs `./scripts/ci.sh` on Ubuntu and macOS (host tests, Clojure tests, cljfmt, windowless protocol-test).
+There is no Clojars release yet. Depend on this repo with `:local/root` or a git SHA. GitHub Actions runs `./scripts/ci.sh` on Ubuntu and macOS (Rust unit plus production-renderer interaction tests, Clojure tests, cljfmt, and the windowless socket protocol test). macOS additionally runs the explicit offscreen Metal pixel target.
 
 ![screenshot](https://i.imgur.com/gKXfCnx.png)
 
@@ -37,6 +37,9 @@ clojure -M:protocol-test
 # All of the above plus host `cargo test` (what GitHub Actions runs)
 ./scripts/ci.sh
 
+# macOS only: fixed production RootView fixture through offscreen Metal
+cargo test --locked --manifest-path host/Cargo.toml --test rendering
+
 # Example native window (plain counter)
 cd examples/counter && clj -M:dev
 
@@ -49,6 +52,23 @@ cd examples/todomvc && clj -M:dev
 # Custom ThemeSet defined in Clojure (Catppuccin Violet)
 cd examples/themes/catppuccin-violet && clj -M:dev
 ```
+
+The Rust interaction tests use GPUI Kit observations: an accessible label/value
+is semantic state, not proof that text pixels were drawn, and an absent optional
+observation is not `false`. Disabled behavior is tested by attempting the action;
+slider numbers are asserted from application state. The explicit macOS target is
+the complementary real offscreen-Metal check. The regular host `cargo test` also
+runs the missing-default-monospace fixture in a separate executable so Kit's
+process-global font cache starts clean. Keep native-window smoke tests for titlebars,
+OS menus, focus/IME, and window capture.
+
+For the native macOS composed-text smoke, launch the Widgets gallery, open
+**Text & number inputs**, clear and focus the Search field, then use a real input
+source composition. With the German input source, press the `^` dead key followed
+by `a` and verify that the committed `â` appears in the input, Search field, and
+textarea that share the example's Clojure atom. Append and delete one ordinary
+character to confirm editing continues after composition. Automation that inserts
+an already-finalized Unicode string is not a substitute for this marked-text path.
 
 The widget gallery has a sidebar of focused sections, with `ui/` function
 labels and short explanations above live examples. Look up those functions
@@ -513,15 +533,15 @@ JSON still works: put extra theme-set files (same schema as [GPUI Kit themes](ht
 
 * **Two processes, JSON copies.** Fine for this slice. A future JNI path can keep the same Clojure API.
 * **Whole-window rerender.** No incremental DOM-style diffing.
-* **GPUI Kit Theme is process-global.** Nested `:theme` restores the previous palette before a sibling paints. That is safe for one window; a second window would share the global. Headless GPUI cannot paint two themed buttons here without a real window.
+* **GPUI Kit Theme is process-global.** Nested `:theme` restores the previous palette before a sibling paints. That is safe for one window; a second window would share the global. Semantic headless tests cover one production window; the explicit macOS Metal target covers pixels. Native smoke tests remain necessary for titlebars, menus, focus/IME, and OS capture.
 * **Callback ids are per-tree.** In-flight clicks after a reload can miss if the id was rebuilt.
-* **Linux Vulkan.** Headless checks should use `clojure -M:protocol-test`. For a window without a discrete GPU, Mesa lavapipe works (`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`).
+* **Linux Vulkan.** The Rust interaction suite and `clojure -M:protocol-test` are headless. The Metal pixel target is unsupported on Linux. For a real window without a discrete GPU, Mesa lavapipe works (`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`).
 * **`preview-png` is an OS window shot**, not GPU readback. Linux/Windows spawn `clj-gpui --capture-preview --pid <host-pid>` and [xcap](https://crates.io/crates/xcap) 0.4.1. That Linux path is X11/XCB: X11 and XWayland windows capture; native Wayland windows are not reliably enumerated and may return `nil`. macOS captures in-process with ScreenCaptureKit, and only then disables GPUI's occluded display-link pause ([zed#63217](https://github.com/zed-industries/zed/issues/63217)). Missing macOS Screen Recording permission returns `nil`. Xvfb/X11 is the deterministic Linux CI path.
 * **Packaging** is native-only (macOS `.app` on macOS, AppImage/deb on Linux). See [Packaging](#packaging).
 
 ## Packaging
 
-A packaged app is still two processes: a bundled JRE running `gpui.prod`, plus the bundled GPUI host. `gpui.prod` does **not** start nREPL, watch source, or invoke Cargo.
+A packaged app is still two processes: a bundled JRE running `gpui.prod`, plus the bundled GPUI host. `gpui.prod` does **not** start nREPL, watch source, or invoke Cargo, and it always suppresses the development footer and FPS HUD even when the application uses `:chrome :dev` locally.
 
 In the application repo, add `gpui.edn`:
 
@@ -549,6 +569,14 @@ Then, on the target OS:
 
 ```bash
 clj -X:build package
+```
+
+The project template and every checked-in example already contain a `gpui.edn` and this build alias. For a packaged-app smoke test on macOS:
+
+```bash
+cd examples/widgets
+clj -X:build package
+open target/package/widgets.app
 ```
 
 Use `-X` (not `-T`): `gpui.package` lives in the clj-gpui library, so the project deps must stay on the classpath. `-T` would replace them. `clj -X:build` with `:exec-fn gpui.package/package` is the same default.

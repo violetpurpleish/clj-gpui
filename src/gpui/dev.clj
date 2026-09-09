@@ -38,6 +38,7 @@
         (println "Usage: clojure -M -m gpui.dev [ --protocol-test ] my.app/app")
         (println "Example: cd examples/counter && clojure -M:dev"))
       (System/exit 2))
+    (runtime/set-production-mode! false)
     (runtime/set-app-symbol! app)
     (runtime/install-render-hook!)
     (try

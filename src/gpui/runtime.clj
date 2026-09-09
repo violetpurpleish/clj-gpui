@@ -28,6 +28,7 @@
 (defonce ^:private callback-hold (atom 0))
 (defonce ^:private app-var* (atom nil))
 (defonce ^:private app-sym* (atom nil))
+(defonce ^:private production-mode* (atom false))
 (defonce ^:private nrepl-port* (atom nil))
 (defonce ^:private file-mtimes (atom {}))
 (defonce ^:private load-error* (atom nil))
@@ -49,6 +50,15 @@
   [sym]
   (reset! app-sym* (symbol (str sym)))
   @app-sym*)
+
+(defn set-production-mode!
+  "Set whether exported root trees must hide development-only host chrome.
+
+  `gpui.prod` enables this before loading the application. Keeping the policy
+  in the runtime lets applications use `:chrome :dev` during development
+  without accidentally shipping the nREPL footer or FPS HUD."
+  [enabled?]
+  (reset! production-mode* (boolean enabled?)))
 
 (defn nrepl-port
   []
@@ -421,7 +431,11 @@
 
 (defn- export-node
   [tree]
-  (json-tree (sanitize tree)))
+  (json-tree
+   (sanitize
+    (if (and @production-mode* (map? tree))
+      (assoc tree :chrome :app)
+      tree))))
 
 (defn export-tree
   "Build a UI tree, registering callbacks as string ids.

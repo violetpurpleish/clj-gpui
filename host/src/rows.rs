@@ -807,6 +807,11 @@ impl RowListDelegate {
         self.items.iter().any(|row| row.id == id)
     }
 
+    #[cfg(test)]
+    pub fn source_ids(&self) -> Vec<String> {
+        self.items.iter().map(|row| row.id.clone()).collect()
+    }
+
     fn apply_query(&mut self) {
         if self.query.is_empty() {
             self.visible = (0..self.items.len()).collect();

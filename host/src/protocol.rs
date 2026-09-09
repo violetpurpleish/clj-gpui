@@ -838,6 +838,15 @@ pub struct Item {
     /// Menu item icon (kebab name).
     #[serde(default)]
     pub icon: Option<String>,
+    /// UTF-8 SVG source for item icon slots. Explicit SVG wins over `icon`.
+    #[serde(default, rename = "icon-svg")]
+    pub icon_svg: Option<String>,
+    /// Sidebar menu-item container style using the ordinary node style vocabulary.
+    #[serde(default)]
+    pub style: Option<Box<Node>>,
+    /// Sidebar label-only style, kept separate from the item container.
+    #[serde(default, rename = "label-style")]
+    pub label_style: Option<Box<Node>>,
     /// Command palette extra search terms (Kit `CommandItem::keywords`).
     #[serde(default)]
     pub keywords: Vec<String>,
@@ -1101,6 +1110,10 @@ pub struct Node {
     pub disabled: bool,
     #[serde(default)]
     pub tooltip: Option<String>,
+    /// Native Button tooltip placement (`top`, `right`, `bottom`, `left`).
+    /// Omitted keeps Kit auto placement.
+    #[serde(default, rename = "tooltip-placement")]
+    pub tooltip_placement: Option<String>,
     /// Chart hover tooltip. Kit default is `id: None` (non-interactive). `true` calls `.id(...)`.
     /// Not the string `tooltip` field on any node.
     #[serde(default)]
@@ -1129,6 +1142,9 @@ pub struct Node {
     /// Select / Combobox trigger chevron.
     #[serde(default)]
     pub icon: Option<String>,
+    /// UTF-8 SVG source. Explicit SVG wins over `icon` when both are present.
+    #[serde(default, rename = "icon-svg")]
+    pub icon_svg: Option<String>,
     #[serde(default, rename = "control-size")]
     pub control_size: Option<String>,
     #[serde(default)]
@@ -1240,6 +1256,15 @@ pub struct Node {
     /// Code editor highlighter language (`rust`, `clojure`, …).
     #[serde(default)]
     pub language: Option<String>,
+    /// Editor preference. Omitted preserves Kit's `true` default/current value.
+    #[serde(default, rename = "auto-close")]
+    pub auto_close: Option<bool>,
+    /// Editor preference. Omitted preserves Kit's `true` default/current value.
+    #[serde(default, rename = "smart-indent")]
+    pub smart_indent: Option<bool>,
+    /// Markdown-only opt-in for YAML frontmatter parsing and structured rendering.
+    #[serde(default)]
+    pub frontmatter: bool,
     /// OTP masked cells. `input`: Kit `InputState::masked` (applied when
     /// the Clojure value changes, or when `:mask-toggle` is removed, so a
     /// native mask-toggle is not overwritten every frame). Kit `Label`:
@@ -3874,5 +3899,60 @@ mod tests {
         assert_eq!(table.text.as_deref(), Some("Invoices"));
         assert_eq!(table.options[0].align.as_deref(), Some("end"));
         assert_eq!(table.items[1].variant.as_deref(), Some("footer"));
+    }
+
+    #[test]
+    fn decodes_gpui_kit_061_surface_options() {
+        let button: Node = serde_json::from_value(json!({
+            "type": "button",
+            "icon": "accessibility",
+            "icon-svg": "<svg><text>λ</text></svg>",
+            "tooltip": "Explain",
+            "tooltip-placement": "left"
+        }))
+        .unwrap();
+        assert_eq!(button.icon.as_deref(), Some("accessibility"));
+        assert_eq!(
+            button.icon_svg.as_deref(),
+            Some("<svg><text>λ</text></svg>")
+        );
+        assert_eq!(button.tooltip_placement.as_deref(), Some("left"));
+
+        let editor: Node = serde_json::from_value(json!({
+            "type": "editor",
+            "auto-close": false,
+            "smart-indent": false
+        }))
+        .unwrap();
+        assert_eq!(editor.auto_close, Some(false));
+        assert_eq!(editor.smart_indent, Some(false));
+
+        let markdown: Node = serde_json::from_value(json!({
+            "type": "markdown",
+            "frontmatter": true
+        }))
+        .unwrap();
+        assert!(markdown.frontmatter);
+
+        let sidebar: Node = serde_json::from_value(json!({
+            "type": "sidebar",
+            "items": [{
+                "id": "inbox",
+                "label": "Inbox",
+                "icon-svg": "<svg><path d='M0 0'/></svg>",
+                "style": {"bg": "#112233", "padding": 6},
+                "label-style": {"color": "#ffffff", "font-weight": "bold"}
+            }]
+        }))
+        .unwrap();
+        let item = &sidebar.items[0];
+        assert!(item.icon_svg.as_deref().unwrap().contains("<path"));
+        assert_eq!(item.style.as_ref().and_then(|n| n.padding), Some(6.0));
+        assert_eq!(
+            item.label_style
+                .as_ref()
+                .and_then(|n| n.font_weight.as_deref()),
+            Some("bold")
+        );
     }
 }

@@ -1,0 +1,6 @@
+{:name "widgets"
+ :version "0.1.0"
+ :main widgets.app/app
+ :id "com.violetpurpleish.clj-gpui.widgets"
+ :title "Widgets"
+ :description "The clj-gpui widget gallery"}

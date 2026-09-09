@@ -9,7 +9,7 @@ use crate::mapping;
 use crate::protocol::{Cmd, Node};
 use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, div};
 use gpui_component::{
-    Icon, Sizable as _,
+    Sizable as _,
     attachment::{
         Attachment, AttachmentActions, AttachmentContent, AttachmentDescription, AttachmentGroup,
         AttachmentMedia, AttachmentStatus, AttachmentTitle,
@@ -885,10 +885,8 @@ fn render_marker<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> Marker {
     if let Some(style) = mapping::style_refinement(node.separator_style.as_deref()) {
         marker = marker.separator_style(style);
     }
-    if let Some(name) = node.icon.as_deref().filter(|s| !s.is_empty()) {
-        if let Some(icon) = mapping::parse_icon(name) {
-            marker = marker.icon(MarkerIcon::new().child(Icon::new(icon)));
-        }
+    if let Some(icon) = mapping::icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref()) {
+        marker = marker.icon(MarkerIcon::new().child(icon));
     }
     let mut has_content = false;
     for (index, child) in node.children.iter().enumerate() {
@@ -912,10 +910,11 @@ fn render_marker<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> Marker {
 
 fn render_marker_icon<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> MarkerIcon {
     let mut icon = MarkerIcon::new();
-    if let Some(name) = node.icon.as_deref().or(node.text.as_deref()) {
-        if let Some(parsed) = mapping::parse_icon(name) {
-            icon = icon.child(Icon::new(parsed));
-        }
+    if let Some(parsed) = mapping::icon_from_parts(
+        node.icon.as_deref().or(node.text.as_deref()),
+        node.icon_svg.as_deref(),
+    ) {
+        icon = icon.child(parsed);
     }
     for (index, child) in node.children.iter().enumerate() {
         icon = icon.child(paint_child(p, child, &child_path(path, index)));

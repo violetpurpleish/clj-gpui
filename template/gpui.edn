@@ -1,0 +1,6 @@
+{:name "my-app"
+ :version "0.1.0"
+ :main my.app/app
+ :id "com.example.my-app"
+ :title "My App"
+ :description "A native GPUI application"}

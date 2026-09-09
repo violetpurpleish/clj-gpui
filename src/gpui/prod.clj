@@ -41,6 +41,7 @@
         (println "Usage: java -cp app.jar gpui.prod my.app/app")
         (println "A packaged app also reads :main from gpui-app.edn on the classpath."))
       (System/exit 2))
+    (runtime/set-production-mode! true)
     (runtime/set-app-symbol! app)
     (runtime/install-render-hook!)
     (try

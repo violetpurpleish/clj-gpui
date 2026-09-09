@@ -72,6 +72,7 @@ use gpui_component::{
     v_flex,
 };
 use gpui_kit as gpui;
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component as gpui_component;
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -113,6 +114,8 @@ struct InputSlot {
 struct TextControlSlot<S> {
     state: Entity<S>,
     language: Option<String>,
+    auto_close: bool,
+    smart_indent: bool,
     on_change: Option<String>,
     on_submit: Option<String>,
     on_blur: Option<String>,
@@ -540,6 +543,117 @@ impl chat::NodePainter for RenderPaint<'_, '_, '_, '_> {
 }
 
 impl RootView {
+    #[cfg(test)]
+    pub(crate) fn test_editor_state(&self, key: &str) -> Option<Entity<EditorState>> {
+        self.editors.get(key).map(|slot| slot.state.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_slider_value(&self, key: &str, cx: &App) -> Option<SliderValue> {
+        self.sliders
+            .get(key)
+            .map(|slot| slot.state.read(cx).value())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_slider_state(&self, key: &str) -> Option<Entity<SliderState>> {
+        self.sliders.get(key).map(|slot| slot.state.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_dialog_state(&self) -> (usize, Vec<String>, bool) {
+        (
+            self.dialogs.len(),
+            self.dialog_keys.clone(),
+            self.dialog_pending,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_tree_child_ids(&self) -> Vec<Option<String>> {
+        self.tree
+            .as_ref()
+            .map(|tree| tree.children.iter().map(|child| child.id.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_list_state(
+        &self,
+        key: &str,
+        cx: &App,
+    ) -> Option<(Vec<String>, Option<usize>, EntityId)> {
+        self.lists.get(key).map(|slot| {
+            let list = slot.state.read(cx);
+            (
+                list.delegate().source_ids(),
+                list.selected_index().map(|index| index.row),
+                slot.state.entity_id(),
+            )
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_table_state(
+        &self,
+        key: &str,
+        cx: &App,
+    ) -> Option<(Vec<String>, Option<usize>, EntityId)> {
+        self.tables.get(key).map(|slot| {
+            let table = slot.state.read(cx);
+            (
+                table.delegate().source_ids().to_vec(),
+                table.selected_row(),
+                slot.state.entity_id(),
+            )
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_tree_state(
+        &self,
+        key: &str,
+        cx: &App,
+    ) -> Option<(Option<String>, EntityId)> {
+        self.trees.get(key).map(|slot| {
+            let tree = slot.state.read(cx);
+            (
+                tree.selected_entry()
+                    .map(|entry| entry.item().id.to_string()),
+                slot.state.entity_id(),
+            )
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_layout_state_ids(
+        &self,
+        resizable: &str,
+        dock: &str,
+    ) -> (Option<EntityId>, Option<EntityId>) {
+        (
+            self.resizables.get(resizable).map(Entity::entity_id),
+            self.docks.get(dock).map(|slot| slot.area.entity_id()),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_resizable_sizes(&self, key: &str, cx: &App) -> Option<Vec<f32>> {
+        self.resizables.get(key).map(|state| {
+            state
+                .read(cx)
+                .sizes()
+                .iter()
+                .map(|size| f32::from(*size))
+                .collect()
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_date_state_id(&self, key: &str) -> Option<EntityId> {
+        self.dates.get(key).map(|slot| slot.state.entity_id())
+    }
+
     pub fn new(
         nrepl_port: u16,
         cmd_tx: mpsc::Sender<Cmd>,
@@ -1442,8 +1556,12 @@ impl RootView {
             return div().into_any_element();
         };
         match &slot.state {
-            SelectStateHandle::Flat(state) => finish_select(Select::new(state), node, cx),
-            SelectStateHandle::Grouped(state) => finish_select(Select::new(state), node, cx),
+            SelectStateHandle::Flat(state) => {
+                finish_select(Select::new(state).id(eid(key)), node, cx)
+            }
+            SelectStateHandle::Grouped(state) => {
+                finish_select(Select::new(state).id(eid(key)), node, cx)
+            }
         }
     }
 
@@ -1576,7 +1694,7 @@ impl RootView {
             "input" => {
                 let state = self.input_slot(&key, node, window, cx);
                 apply_style(
-                    mapping::apply_input_chrome(Input::new(&state), node),
+                    mapping::apply_input_chrome(Input::new(&state).id(eid(&key)), node),
                     node,
                     cx,
                 )
@@ -1667,9 +1785,18 @@ impl RootView {
                 let default_h = extra::chart_viewport(node).1;
                 viewport_sized(extra::paint_chart(node, &key, cx), node, default_h, cx)
             }
-            "markdown" | "html" => apply_style(v_flex().id(eid(&key)), node, cx)
-                .child(extra::paint_markdown(node, &key))
-                .into_any_element(),
+            "markdown" | "html" => apply_style(
+                v_flex()
+                    .id(eid(&key))
+                    .test_support()
+                    // Test-support records this production viewport's resolved bounds;
+                    // the selector is a no-op in normal release builds.
+                    .debug_selector(|| "production-markdown-viewport".into()),
+                node,
+                cx,
+            )
+            .child(extra::paint_markdown(node, &key))
+            .into_any_element(),
             "sidebar" => self.render_sidebar(node, &key, cx),
             "settings" => viewport_sized(
                 extra::build_settings(node, &key, &self.cmd_tx),
@@ -1752,7 +1879,8 @@ impl RootView {
     fn render_toggle(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
         let checked = node.checked.unwrap_or(false);
         let mut el = Toggle::new(eid(key)).checked(checked);
-        if let Some(icon) = node.icon.as_deref().and_then(mapping::parse_icon) {
+        if let Some(icon) = mapping::icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref())
+        {
             el = el.icon(icon);
         }
         if let Some(text) = node.text.clone() {
@@ -1799,7 +1927,9 @@ impl RootView {
                 {
                     toggle = toggle.label(label);
                 }
-                if let Some(icon) = item.icon.as_deref().and_then(mapping::parse_icon) {
+                if let Some(icon) =
+                    mapping::icon_from_parts(item.icon.as_deref(), item.icon_svg.as_deref())
+                {
                     toggle = toggle.icon(icon);
                 }
                 if item.disabled {
@@ -2566,7 +2696,9 @@ impl RootView {
             if item.disabled {
                 step = step.disabled(true);
             }
-            if let Some(icon) = item.icon.as_deref().and_then(mapping::parse_icon) {
+            if let Some(icon) =
+                mapping::icon_from_parts(item.icon.as_deref(), item.icon_svg.as_deref())
+            {
                 step = step.icon(icon);
             }
             stepper = stepper.item(step);
@@ -2593,9 +2725,10 @@ impl RootView {
             .as_deref()
             .or(node.text.as_deref())
             .unwrap_or("check");
-        let icon = mapping::parse_icon(name).unwrap_or(IconName::Asterisk);
+        let icon = mapping::icon_from_parts(Some(name), node.icon_svg.as_deref())
+            .unwrap_or_else(|| Icon::new(IconName::Asterisk));
         apply_style(
-            Icon::new(icon).with_size(mapping::parse_scale(node.control_size.as_deref())),
+            icon.with_size(mapping::parse_scale(node.control_size.as_deref())),
             node,
             cx,
         )
@@ -2719,7 +2852,7 @@ impl RootView {
             let id = item.id_or_label();
             let title = item.label_or_id();
             let is_open = open_ids.iter().any(|open| open == &id);
-            let icon = item.icon.as_deref().and_then(mapping::parse_icon);
+            let icon = mapping::icon_from_parts(item.icon.as_deref(), item.icon_svg.as_deref());
             let content = if let Some(child) = item.content.as_ref() {
                 self.render_node(child, &format!("{path}-acc-{ix}"), window, cx)
             } else {
@@ -3822,7 +3955,6 @@ impl RootView {
             for key in keys {
                 let live = live.clone();
                 let emit = emit.clone();
-                let close = Rc::new(RefCell::new(overlay::DialogClose::default()));
                 let is_alert = live
                     .borrow()
                     .iter()
@@ -3839,14 +3971,10 @@ impl RootView {
                             Some(cx),
                         )];
                         let alert = overlay::configure_alert_dialog(alert, &spec.node, children);
-                        overlay::bind_alert_dialog_callbacks(
-                            alert,
-                            key.clone(),
-                            emit.clone(),
-                            close.clone(),
-                        )
+                        overlay::bind_alert_dialog_callbacks(alert, key.clone(), emit.clone())
                     });
                 } else {
+                    let close = Rc::new(RefCell::new(overlay::DialogClose::default()));
                     window.open_dialog(cx, move |dialog, _, cx| {
                         let Some(spec) = overlay::latest_dialog_spec(&live, &key) else {
                             return dialog;
@@ -3867,6 +3995,10 @@ impl RootView {
                     });
                 }
             }
+            // The active dialogs live on `Root`, but their rendered layer is
+            // mounted by this view. Invalidate after Root has actually changed,
+            // otherwise this view can cache a pre-open layer snapshot.
+            let _ = entity.update(cx, |_, cx| cx.notify());
         });
     }
 
@@ -3906,6 +4038,7 @@ impl RootView {
                 (key, this.sheet_live.clone(), this.cmd_tx.clone(), placement)
             });
             let Some(key) = key else {
+                let _ = entity.update(cx, |_, cx| cx.notify());
                 return;
             };
             window.open_sheet_at(placement, cx, move |sheet, _, cx| {
@@ -3929,6 +4062,7 @@ impl RootView {
                 let sheet = overlay::configure_sheet(sheet, &spec.node, children, footer);
                 overlay::bind_sheet_callbacks(sheet, &spec.node, cmd_tx.clone())
             });
+            let _ = entity.update(cx, |_, cx| cx.notify());
         });
     }
 
@@ -4023,7 +4157,9 @@ impl RootView {
         if let Some(title) = spec.node.title.clone() {
             note = note.title(title);
         }
-        if let Some(icon) = spec.node.icon.as_deref().and_then(mapping::parse_icon) {
+        if let Some(icon) =
+            mapping::icon_from_parts(spec.node.icon.as_deref(), spec.node.icon_svg.as_deref())
+        {
             note = note.icon(icon);
         }
         if let Some(placement) = mapping::parse_anchor(spec.node.placement.as_deref()) {
@@ -4264,8 +4400,9 @@ impl RootView {
         if let Some(label) = node.text.clone().or(node.title.clone()) {
             picker = picker.label(label);
         }
-        if let Some(name) = node.icon.as_deref().and_then(mapping::parse_icon) {
-            picker = picker.icon(Icon::new(name));
+        if let Some(icon) = mapping::icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref())
+        {
+            picker = picker.icon(icon);
         }
         if let Some(label) = node
             .accessibility_label
@@ -4453,6 +4590,8 @@ impl RootView {
     ) -> Entity<EditorState> {
         self.used_editors.insert(key.to_string());
         let language = extra::editor_language(node);
+        let auto_close = node.auto_close.unwrap_or(true);
+        let smart_indent = node.smart_indent.unwrap_or(true);
         let wanted = node.text.clone().unwrap_or_default();
         if let Some(slot) = self.editors.get_mut(key) {
             let id_changed = slot.on_change != node.on_change;
@@ -4475,6 +4614,18 @@ impl RootView {
                     input.refresh(cx);
                 });
             }
+            if slot.auto_close != auto_close {
+                slot.auto_close = auto_close;
+                state.update(cx, |input, cx| {
+                    input.set_auto_close(auto_close, window, cx);
+                });
+            }
+            if slot.smart_indent != smart_indent {
+                slot.smart_indent = smart_indent;
+                state.update(cx, |input, cx| {
+                    input.set_smart_indent(smart_indent, window, cx);
+                });
+            }
             if refresh {
                 Self::schedule_input_change_flush(key.to_string(), TextFlush::Editor, window, cx);
             }
@@ -4484,6 +4635,8 @@ impl RootView {
         let state = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language(language.clone())
+                .auto_close(auto_close)
+                .smart_indent(smart_indent)
                 .placeholder(placeholder)
                 .default_value(wanted)
         });
@@ -4492,6 +4645,8 @@ impl RootView {
             TextControlSlot {
                 state: state.clone(),
                 language: Some(language),
+                auto_close,
+                smart_indent,
                 on_change: node.on_change.clone(),
                 on_submit: node.on_submit.clone(),
                 on_blur: node.on_blur.clone(),
@@ -4599,6 +4754,8 @@ impl RootView {
             TextControlSlot {
                 state: state.clone(),
                 language: None,
+                auto_close: true,
+                smart_indent: true,
                 on_change: node.on_change.clone(),
                 on_submit: node.on_submit.clone(),
                 on_blur: node.on_blur.clone(),
@@ -4881,8 +5038,17 @@ impl RootView {
                 let id = item.id_or_label();
                 let mut row = SidebarMenuItem::new(item.label_or_id())
                     .active(selected.as_deref() == Some(id.as_str()))
-                    .collapsed(collapsed);
-                if let Some(icon) = item.icon.as_deref().and_then(mapping::parse_icon) {
+                    .collapsed(collapsed)
+                    .disable(item.disabled);
+                if let Some(style) = item.style.as_deref() {
+                    row = mapping::apply_styled(row, style);
+                }
+                if let Some(style) = mapping::style_refinement(item.label_style.as_deref()) {
+                    row = row.label_style(style);
+                }
+                if let Some(icon) =
+                    mapping::icon_from_parts(item.icon.as_deref(), item.icon_svg.as_deref())
+                {
                     row = row.icon(icon);
                 }
                 let cmd_tx = cmd_tx.clone();
@@ -5724,8 +5890,8 @@ where
     if let Some(enabled) = node.focus_ring {
         select = select.focus_ring(enabled);
     }
-    if let Some(name) = node.icon.as_deref().and_then(mapping::parse_icon) {
-        select = select.icon(Icon::new(name));
+    if let Some(icon) = mapping::icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref()) {
+        select = select.icon(icon);
     }
     if let Some(label) = node
         .accessibility_label
@@ -5871,8 +6037,8 @@ where
     if let Some(enabled) = node.focus_ring {
         combo = combo.focus_ring(enabled);
     }
-    if let Some(name) = node.icon.as_deref().and_then(mapping::parse_icon) {
-        combo = combo.icon(Icon::new(name));
+    if let Some(icon) = mapping::icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref()) {
+        combo = combo.icon(icon);
     }
     if let Some(name) = node.check_icon.as_deref().and_then(mapping::parse_icon) {
         combo = combo.check_icon(Icon::new(name));

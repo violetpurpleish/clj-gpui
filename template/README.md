@@ -29,4 +29,6 @@ You can also point at a built host binary with `CLJ_GPUI_BIN`, or at a library c
 
 ## Package
 
-Write `gpui.edn` (see the library README) and run `clj -X:build package` on the OS you are shipping for. That uses `gpui.prod`: no nREPL, no source watcher, no Cargo at runtime. Use `-X` so clj-gpui stays on the classpath.
+Customize the included `gpui.edn`, then run `clj -X:build package` on the OS you are shipping for. That uses `gpui.prod`: no nREPL, no source watcher, no Cargo or development chrome at runtime. Use `-X` so clj-gpui stays on the classpath.
+
+On macOS this writes `target/package/my-app.app`. Linux writes an AppImage and a `.deb`. The bundle includes a reduced Java runtime and the native host, so end users do not need Clojure, Java, or Rust installed.
