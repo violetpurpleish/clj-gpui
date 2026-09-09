@@ -72,6 +72,7 @@ use gpui_component::{
     v_flex,
 };
 use gpui_kit as gpui;
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component as gpui_component;
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -1784,9 +1785,18 @@ impl RootView {
                 let default_h = extra::chart_viewport(node).1;
                 viewport_sized(extra::paint_chart(node, &key, cx), node, default_h, cx)
             }
-            "markdown" | "html" => apply_style(v_flex().id(eid(&key)), node, cx)
-                .child(extra::paint_markdown(node, &key))
-                .into_any_element(),
+            "markdown" | "html" => apply_style(
+                v_flex()
+                    .id(eid(&key))
+                    .test_support()
+                    // Test-support records this production viewport's resolved bounds;
+                    // the selector is a no-op in normal release builds.
+                    .debug_selector(|| "production-markdown-viewport".into()),
+                node,
+                cx,
+            )
+            .child(extra::paint_markdown(node, &key))
+            .into_any_element(),
             "sidebar" => self.render_sidebar(node, &key, cx),
             "settings" => viewport_sized(
                 extra::build_settings(node, &key, &self.cmd_tx),

@@ -42,7 +42,7 @@ Use the [tagged testing guide](https://github.com/longbridge/gpui-kit/blob/v0.6.
 - [x] Use the real offscreen Metal renderer on a fixed production `RootView` fixture containing label glyph edges, highlighted Clojure editor text, a selected ghost button, Markdown inline code/hard break, and frontmatter. The fixture checks determinism and a visible state change; failures save PNGs under `/private/tmp` for CI upload.
 - [x] Make the macOS target fail when Metal is unavailable. Other platforms print an explicit unsupported/skipped message and do not substitute semantic snapshots.
 - [x] Retain native-window smoke checks for titlebars, menus, capture, and real focus. Command & Capture now also verifies the Widgets native menu opens beside its trigger, accepts keyboard traversal, dispatches Word wrap, closes, and updates its checkmark.
-- [ ] Add a dedicated composed-text IME smoke run; semantic and Metal headless tests do not stand in for it.
+- [x] Add a dedicated composed-text IME smoke run; semantic and Metal headless tests do not stand in for it. In the focused Widgets Search field, a real German `^` dead-key composition committed `â`; the shared Clojure atom rerendered the same value in all three text controls, ordinary `x` input produced `âx`, and Backspace returned it to `â`.
 - [x] Package the Widgets example with `clj -X:build package` and smoke-test the resulting `.app`. `gpui.prod` forces app chrome so the bundle cannot ship the development footer or FPS HUD even when the source tree requests `:chrome :dev` locally.
 - [x] Document exact local commands in README. Windows CI remains a follow-up.
 
@@ -65,10 +65,10 @@ Verify these through existing wrappers; do not reimplement the upstream fixes lo
 
 - [x] Editor search reopening and active-match preservation use retained production state; search navigation exercises Kit's reveal path, and a live Clojure-to-Rust language change refreshes the same editor before the Metal syntax fixture is captured.
 - [x] Markdown hard/soft breaks and replacement with equal block counts are covered by an isolated third Metal capture.
-- [ ] Add a production-wrapper drag/release case for Markdown text-selection autoscroll stopping on release.
+- [x] Add a production-wrapper drag/release case for Markdown text-selection autoscroll stopping on release. The fixed-height Clojure `Node` fixture advances GPUI test time while the pointer is held at the viewport edge, proves the selection expands, releases the mouse, then proves it stays fixed.
 - [x] Selected ghost-button appearance, accessible Select activation, dialog close-button behavior, and calendar-day accessibility/selection are covered by Metal and production headless fixtures.
 - [x] Resizable panels retain their state and report two nonzero laid-out sizes; shrinking List/DataTable fixtures clear a configured selection whose row disappeared.
-- [ ] Add a deterministic production-wrapper fixture that removes the configured default monospace font and proves fallback rendering.
+- [x] Add a deterministic production-wrapper fixture that removes the configured default monospace font and proves fallback rendering. A separate test executable avoids Kit's process-global font-resolution cache, uses GPUI's deterministic no-op text system without the platform monospace default, asserts `.SystemUIFont`, and lays out a production editor plus Markdown code block.
 - [x] Keep the TodoMVC title font workaround. The resolved renderer remains `gpui-pre` 0.3.3, and the fresh native TodoMVC capture still exercises the workaround; this Kit release does not change the underlying macOS glyph-edge-clipping cause.
 
 ## 6. Documentation and completion
@@ -80,10 +80,10 @@ Verify these through existing wrappers; do not reimplement the upstream fixes lo
 
 ## Validation result
 
-- `./scripts/ci.sh`: passed — 307 Rust tests; 116 Clojure tests / 1,330 assertions; cljfmt; normal debug host build; socket protocol test. Production headless coverage now contains ten renderer interaction/layout tests plus the deferred-sheet regression.
+- `./scripts/ci.sh`: passed — 308 Rust tests plus the isolated missing-default-monospace executable; 116 Clojure tests / 1,330 assertions; cljfmt; normal debug host build; socket protocol test. Production headless coverage now contains eleven renderer interaction/layout tests plus the deferred-sheet regression.
 - `cargo test --locked --manifest-path host/Cargo.toml --test rendering`: passed on macOS with the real offscreen Metal renderer. It now reports three checks, including isolated equal-block Markdown replacement. One earlier launch exited during a transient `com.apple.hiservices-xpcservice` connection failure; CI intentionally does not convert that into a skip.
 - `cargo tree --locked --manifest-path host/Cargo.toml -d`: no incompatible duplicate GPUI family.
-- Native Command & Capture smoke passed after launching all four approved examples from their project directories. Fresh post-action captures verified Counter increment/reset; TodoMVC focused Unicode entry, submit, toggle, and delete; Widgets navigation, Select keyboard commit, Clojure editor auto-pairing, frontmatter rendering, and a pointer-anchored native menu with keyboard traversal/selection of Word wrap; and Catppuccin theme switching, checkbox input, and focused Unicode typing. Window titlebars and capture also remained healthy. Composed-text IME remains in the native-only follow-up above.
+- Native Command & Capture smoke passed after launching all four approved examples from their project directories. Fresh post-action captures verified Counter increment/reset; TodoMVC focused Unicode entry, submit, toggle, and delete; Widgets navigation, Select keyboard commit, Clojure editor auto-pairing, frontmatter rendering, and a pointer-anchored native menu with keyboard traversal/selection of Word wrap; and Catppuccin theme switching, checkbox input, and focused Unicode typing. A physical German dead-key composition in Widgets committed `â`, propagated through the Clojure owner, accepted following text, and remained editable; a fresh capture and accessibility snapshot verified the final `â`. Window titlebars and capture also remained healthy.
 - `cd examples/widgets && clj -X:build package`: produced a 142 MB ARM64 `target/package/widgets.app` with a valid plist, bundled release host, jlink runtime, application config, and uberjar. LaunchServices and fresh Command & Capture captures verified the packaged window has no FPS/nREPL development chrome and that a switch click still rerenders through the bundled production bridge.
 - Linux keeps semantic headless coverage but no pixel renderer. Windows remains outside the current CI matrix.
 

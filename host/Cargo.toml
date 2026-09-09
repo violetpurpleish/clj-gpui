@@ -12,6 +12,11 @@ path = "tests/rendering.rs"
 test = false
 harness = false
 
+[[test]]
+name = "mono-font-fallback"
+path = "tests/mono_font_fallback.rs"
+harness = false
+
 [dependencies]
 anyhow = "1"
 async-channel = "2"

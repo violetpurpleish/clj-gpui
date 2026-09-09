@@ -6,14 +6,15 @@
 
 use crate::protocol::{Cmd, HostEvent, Node};
 use crate::{renderer::RootView, syntax};
+use gpui_kit::base::TextSelection;
 use gpui_kit::component::Root;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::input::Position;
 use gpui_kit::component::slider::SliderValue;
 use gpui_kit::test::{TestAppContextExt, TestWindowExt};
 use gpui_kit::{
-    AppContext as _, Entity, EntityInputHandler as _, ScrollDelta, TestAppContext, WindowHandle,
-    point, px, size,
+    AppContext as _, Entity, EntityInputHandler as _, Modifiers, MouseButton, ScrollDelta,
+    TestAppContext, VisualTestContext, WindowHandle, point, px, size,
 };
 use serde_json::json;
 use std::sync::mpsc;
@@ -462,6 +463,71 @@ fn editor_tree(language: &str, text: &str) -> Node {
         }]
     }))
     .unwrap()
+}
+
+#[gpui_kit::test]
+async fn production_markdown_selection_autoscroll_stops_on_release(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let source = (0..100)
+        .map(|index| format!("Paragraph {index} with enough text to select"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let tree: Node = serde_json::from_value(json!({
+        "type": "window", "chrome": "app", "padding": 16,
+        "children": [{
+            "type": "markdown", "id": "reader", "height": 220,
+            "selectable": true, "text": source
+        }]
+    }))
+    .unwrap();
+
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(520.), px(340.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    assert!(matches!(cmd_rx.recv().unwrap(), Cmd::Render));
+    event_tx
+        .send(HostEvent::Tree(tree, None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+
+    let mut visual = VisualTestContext::from_window(handle.into(), cx);
+    visual.update(|window, cx| window.render_frame(cx));
+    let bounds = visual
+        .debug_bounds("production-markdown-viewport")
+        .expect("production Markdown viewport bounds");
+    let start = point(bounds.left() + px(30.), bounds.top() + px(30.));
+    let edge = point(bounds.left() + px(60.), bounds.bottom() - px(2.));
+
+    visual.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_move(edge, Some(MouseButton::Left), Modifiers::default());
+    visual.update(|window, cx| window.render_frame(cx));
+    let before = visual.update(|window, cx| TextSelection::selected_text(window, cx));
+    assert!(!before.is_empty(), "the drag must start a text selection");
+
+    for _ in 0..12 {
+        visual.executor().advance_clock(Duration::from_millis(16));
+        visual.run_until_parked();
+        visual.update(|window, cx| window.render_frame(cx));
+    }
+    let held = visual.update(|window, cx| TextSelection::selected_text(window, cx));
+    assert!(
+        held.len() > before.len(),
+        "holding at the viewport edge must extend selection: before={before:?}, held={held:?}"
+    );
+
+    visual.simulate_mouse_up(edge, MouseButton::Left, Modifiers::default());
+    visual.executor().advance_clock(Duration::from_millis(64));
+    visual.run_until_parked();
+    visual.update(|window, cx| window.render_frame(cx));
+    assert_eq!(
+        visual.update(|window, cx| TextSelection::selected_text(window, cx)),
+        held,
+        "mouse release must stop Markdown selection autoscroll"
+    );
 }
 
 #[gpui_kit::test]

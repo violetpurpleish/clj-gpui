@@ -57,8 +57,18 @@ The Rust interaction tests use GPUI Kit observations: an accessible label/value
 is semantic state, not proof that text pixels were drawn, and an absent optional
 observation is not `false`. Disabled behavior is tested by attempting the action;
 slider numbers are asserted from application state. The explicit macOS target is
-the complementary real offscreen-Metal check. Keep native-window smoke tests for
-titlebars, OS menus, focus/IME, and window capture.
+the complementary real offscreen-Metal check. The regular host `cargo test` also
+runs the missing-default-monospace fixture in a separate executable so Kit's
+process-global font cache starts clean. Keep native-window smoke tests for titlebars,
+OS menus, focus/IME, and window capture.
+
+For the native macOS composed-text smoke, launch the Widgets gallery, open
+**Text & number inputs**, clear and focus the Search field, then use a real input
+source composition. With the German input source, press the `^` dead key followed
+by `a` and verify that the committed `â` appears in the input, Search field, and
+textarea that share the example's Clojure atom. Append and delete one ordinary
+character to confirm editing continues after composition. Automation that inserts
+an already-finalized Unicode string is not a substitute for this marked-text path.
 
 The widget gallery has a sidebar of focused sections, with `ui/` function
 labels and short explanations above live examples. Look up those functions
