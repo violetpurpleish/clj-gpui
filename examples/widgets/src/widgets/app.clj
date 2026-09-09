@@ -495,7 +495,6 @@
                        {:id :link :label "Copy link"}]}]
              {:id "gallery-native"
               :open? native-menu?
-              :position [24 160]
               :on-change (fn [id]
                            (swap! !state (fn [s]
                                            (cond-> (assoc s :menu id)

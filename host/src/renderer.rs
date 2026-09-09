@@ -542,6 +542,117 @@ impl chat::NodePainter for RenderPaint<'_, '_, '_, '_> {
 }
 
 impl RootView {
+    #[cfg(test)]
+    pub(crate) fn test_editor_state(&self, key: &str) -> Option<Entity<EditorState>> {
+        self.editors.get(key).map(|slot| slot.state.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_slider_value(&self, key: &str, cx: &App) -> Option<SliderValue> {
+        self.sliders
+            .get(key)
+            .map(|slot| slot.state.read(cx).value())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_slider_state(&self, key: &str) -> Option<Entity<SliderState>> {
+        self.sliders.get(key).map(|slot| slot.state.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_dialog_state(&self) -> (usize, Vec<String>, bool) {
+        (
+            self.dialogs.len(),
+            self.dialog_keys.clone(),
+            self.dialog_pending,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_tree_child_ids(&self) -> Vec<Option<String>> {
+        self.tree
+            .as_ref()
+            .map(|tree| tree.children.iter().map(|child| child.id.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_list_state(
+        &self,
+        key: &str,
+        cx: &App,
+    ) -> Option<(Vec<String>, Option<usize>, EntityId)> {
+        self.lists.get(key).map(|slot| {
+            let list = slot.state.read(cx);
+            (
+                list.delegate().source_ids(),
+                list.selected_index().map(|index| index.row),
+                slot.state.entity_id(),
+            )
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_table_state(
+        &self,
+        key: &str,
+        cx: &App,
+    ) -> Option<(Vec<String>, Option<usize>, EntityId)> {
+        self.tables.get(key).map(|slot| {
+            let table = slot.state.read(cx);
+            (
+                table.delegate().source_ids().to_vec(),
+                table.selected_row(),
+                slot.state.entity_id(),
+            )
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_tree_state(
+        &self,
+        key: &str,
+        cx: &App,
+    ) -> Option<(Option<String>, EntityId)> {
+        self.trees.get(key).map(|slot| {
+            let tree = slot.state.read(cx);
+            (
+                tree.selected_entry()
+                    .map(|entry| entry.item().id.to_string()),
+                slot.state.entity_id(),
+            )
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_layout_state_ids(
+        &self,
+        resizable: &str,
+        dock: &str,
+    ) -> (Option<EntityId>, Option<EntityId>) {
+        (
+            self.resizables.get(resizable).map(Entity::entity_id),
+            self.docks.get(dock).map(|slot| slot.area.entity_id()),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_resizable_sizes(&self, key: &str, cx: &App) -> Option<Vec<f32>> {
+        self.resizables.get(key).map(|state| {
+            state
+                .read(cx)
+                .sizes()
+                .iter()
+                .map(|size| f32::from(*size))
+                .collect()
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_date_state_id(&self, key: &str) -> Option<EntityId> {
+        self.dates.get(key).map(|slot| slot.state.entity_id())
+    }
+
     pub fn new(
         nrepl_port: u16,
         cmd_tx: mpsc::Sender<Cmd>,
@@ -3834,7 +3945,6 @@ impl RootView {
             for key in keys {
                 let live = live.clone();
                 let emit = emit.clone();
-                let close = Rc::new(RefCell::new(overlay::DialogClose::default()));
                 let is_alert = live
                     .borrow()
                     .iter()
@@ -3851,14 +3961,10 @@ impl RootView {
                             Some(cx),
                         )];
                         let alert = overlay::configure_alert_dialog(alert, &spec.node, children);
-                        overlay::bind_alert_dialog_callbacks(
-                            alert,
-                            key.clone(),
-                            emit.clone(),
-                            close.clone(),
-                        )
+                        overlay::bind_alert_dialog_callbacks(alert, key.clone(), emit.clone())
                     });
                 } else {
+                    let close = Rc::new(RefCell::new(overlay::DialogClose::default()));
                     window.open_dialog(cx, move |dialog, _, cx| {
                         let Some(spec) = overlay::latest_dialog_spec(&live, &key) else {
                             return dialog;
@@ -3879,6 +3985,10 @@ impl RootView {
                     });
                 }
             }
+            // The active dialogs live on `Root`, but their rendered layer is
+            // mounted by this view. Invalidate after Root has actually changed,
+            // otherwise this view can cache a pre-open layer snapshot.
+            let _ = entity.update(cx, |_, cx| cx.notify());
         });
     }
 
@@ -3918,6 +4028,7 @@ impl RootView {
                 (key, this.sheet_live.clone(), this.cmd_tx.clone(), placement)
             });
             let Some(key) = key else {
+                let _ = entity.update(cx, |_, cx| cx.notify());
                 return;
             };
             window.open_sheet_at(placement, cx, move |sheet, _, cx| {
@@ -3941,6 +4052,7 @@ impl RootView {
                 let sheet = overlay::configure_sheet(sheet, &spec.node, children, footer);
                 overlay::bind_sheet_callbacks(sheet, &spec.node, cmd_tx.clone())
             });
+            let _ = entity.update(cx, |_, cx| cx.notify());
         });
     }
 

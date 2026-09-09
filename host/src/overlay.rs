@@ -1371,21 +1371,34 @@ pub fn bind_alert_dialog_callbacks(
     alert: AlertDialog,
     key: String,
     emit: ActionEmitter,
-    close: Rc<RefCell<DialogClose>>,
 ) -> AlertDialog {
+    // AlertDialog keeps action callbacks on its own button props but keeps
+    // `on_close` on the embedded Dialog. `build_surface` replaces the latter
+    // props with the former, so a direct WindowExt alert loses an `on_close`
+    // installed here. Emit the already-batched logical close from the native
+    // OK/Cancel action instead. Backdrop, Escape and X all run Cancel first.
+    let cancel_key = key.clone();
+    let cancel_emit = emit.clone();
     alert
-        .on_ok({
-            let close = close.clone();
-            move |_, _, _| close.borrow_mut().action(true)
+        .on_ok(move |_, _, cx| {
+            emit(
+                QueuedAction::DialogClose {
+                    key: key.clone(),
+                    ok: Some(true),
+                },
+                cx,
+            );
+            true
         })
-        .on_cancel({
-            let close = close.clone();
-            move |_, _, _| close.borrow_mut().action(false)
-        })
-        .on_close(move |_, _, cx| {
-            if let Some(action) = close.borrow_mut().take(&key) {
-                emit(action, cx);
-            }
+        .on_cancel(move |_, _, cx| {
+            cancel_emit(
+                QueuedAction::DialogClose {
+                    key: cancel_key.clone(),
+                    ok: Some(false),
+                },
+                cx,
+            );
+            true
         })
 }
 

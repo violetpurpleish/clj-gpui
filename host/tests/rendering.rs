@@ -57,7 +57,7 @@ mod macos {
     use serde_json::json;
     use std::sync::{Arc, mpsc};
 
-    fn tree(editor_text: &str, selected: bool) -> protocol::Node {
+    fn tree(editor_text: &str, selected: bool, markdown_text: &str) -> protocol::Node {
         serde_json::from_value(json!({
             "type": "window",
             "chrome": "app",
@@ -71,7 +71,7 @@ mod macos {
                 {"type": "editor", "id": "source", "text": editor_text,
                  "language": "clojure", "height": 120, "bordered": true},
                 {"type": "markdown", "id": "notes", "height": 140, "frontmatter": true,
-                 "text": "---\ntitle: Pixel fixture\n---\n**hard break**  \n`inline λ`"}
+                 "text": markdown_text}
             ]
         }))
         .expect("valid rendering fixture")
@@ -105,7 +105,11 @@ mod macos {
 
         event_tx
             .send_blocking(protocol::HostEvent::Tree(
-                tree("(defn greet [name]\n  (str \"Hello, \" name))", true),
+                tree(
+                    "(defn greet [name]\n  (str \"Hello, \" name))",
+                    true,
+                    "---\ntitle: Pixel fixture\n---\n**hard break**  \n`inline λ`",
+                ),
                 None,
                 vec![],
             ))
@@ -128,6 +132,7 @@ mod macos {
                 tree(
                     "(defn greet [name]\n  (str \"Welcome, \" name \"!\"))",
                     false,
+                    "---\ntitle: Pixel fixture\n---\n**hard break**  \n`inline λ`",
                 ),
                 None,
                 vec![],
@@ -143,6 +148,27 @@ mod macos {
             panic!("editor text and selected ghost-button changes produced identical pixels");
         }
 
-        println!("rendering: 2 passed (production RootView, Metal)");
+        event_tx
+            .send_blocking(protocol::HostEvent::Tree(
+                tree(
+                    "(defn greet [name]\n  (str \"Welcome, \" name \"!\"))",
+                    false,
+                    "---\ntitle: Pixel fixture\n---\n**soft break**\n`replacement λ`",
+                ),
+                None,
+                vec![],
+            ))
+            .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle.into(), |_, window, cx| window.render_frame(cx))
+            .unwrap();
+        let markdown_updated = cx.capture_screenshot(handle.into()).unwrap();
+        if updated == markdown_updated {
+            save_failure("markdown-equal-block-before", &updated);
+            save_failure("markdown-equal-block-after", &markdown_updated);
+            panic!("equal-block Markdown replacement produced identical pixels");
+        }
+
+        println!("rendering: 3 passed (production RootView, Metal)");
     }
 }

@@ -29,10 +29,10 @@ Use the [tagged testing guide](https://github.com/longbridge/gpui-kit/blob/v0.6.
 - [x] Map explicit input/button/checkbox/switch IDs to queryable GPUI identities. Adding the missing native Input id made the production identity observable without a test-only wrapper.
 - [x] Use `render_frame`, fresh snapshots, and bounded `wait_for` around external tree changes.
 - [x] First end-to-end fixture: a Clojure-shaped input/button tree types `Ada λ🦀`, checks the change and click callbacks, acknowledges the callback sequence with a returned tree, and verifies updated native label/value state and bounds.
-- [ ] Cover controlled values and retained identity: checkbox/switch/slider, Select/Combobox, focus and selection across unrelated rerenders, reordered explicit IDs, unmount/remount, and disabled controls rejecting input.
-- [ ] Cover overlay callback lifetimes through actual clicks/keys: change the callback registry while open, submit/cancel, close and reopen, nested menu paths, and focus restoration. Assert both native UI state and callback count/order.
-- [ ] Add collection/layout cases for List, DataTable, Tree and resizable/dock surfaces: empty or shrinking collections, scrolling to virtualized rows, selection and bounds. Only query rows after they have been painted.
-- [ ] Add editor interactions for language switching, search, CRLF navigation and new editing behavior. Inspect retained editor state where the snapshot API cannot expose the needed property.
+- [x] Cover controlled values and retained identity. Production fixtures now cover checkbox/switch/slider and Select, focused editor preservation, explicit-ID reordering, slider unmount/remount, and disabled rejection; the existing Select/Combobox registry and coalescing regressions cover their retained controlled state.
+- [x] Cover overlay callback lifetimes through actual clicks/keys. The production `Root` fixture changes callbacks while an alert is open, checks OK/Escape/close-button callback count and order, closes and reopens, restores focus, verifies a deferred sheet open/close batch, and clicks a nested menu leaf before its parent path callback.
+- [x] Add collection/layout cases for List, DataTable, Tree and resizable/dock surfaces. The production fixture checks shrinking rows and selection, hidden-tree selection, retained layout entities, and nonzero resizable sizes; a separate 200-row DataTable case queries only painted rows and verifies keyboard scrolling plus viewport bounds.
+- [x] Add editor interactions for live language switching, search reopening/active-match retention, exact CRLF text, auto-closing pairs, and focused state preservation. The fixture inspects the retained `EditorState` where semantic snapshots cannot expose those properties.
 - [x] Document snapshot limits in README. The second production fixture attempts a disabled button click and proves no callback is emitted, while controlled checkbox/switch state and explicit-ID reordering are checked after a returned tree.
 
 ## 3. Pixel checks and CI
@@ -41,7 +41,8 @@ Use the [tagged testing guide](https://github.com/longbridge/gpui-kit/blob/v0.6.
 - [x] Add an explicitly selected macOS `rendering` target with `test = false`, `harness = false`, and test-support.
 - [x] Use the real offscreen Metal renderer on a fixed production `RootView` fixture containing label glyph edges, highlighted Clojure editor text, a selected ghost button, Markdown inline code/hard break, and frontmatter. The fixture checks determinism and a visible state change; failures save PNGs under `/private/tmp` for CI upload.
 - [x] Make the macOS target fail when Metal is unavailable. Other platforms print an explicit unsupported/skipped message and do not substitute semantic snapshots.
-- [ ] Retain native-window smoke checks for titlebars, menus, capture, real focus/IME and packaged-app behavior. Reassess old comments claiming all headless UI checks require a real window/GPU, without weakening platform-specific verification.
+- [x] Retain native-window smoke checks for titlebars, menus, capture, and real focus. Command & Capture now also verifies the Widgets native menu opens beside its trigger, accepts keyboard traversal, dispatches Word wrap, closes, and updates its checkmark.
+- [ ] Add dedicated composed-text IME and packaged-`.app` smoke runs. These remain genuinely native-only; semantic and Metal headless tests do not stand in for them.
 - [x] Document exact local commands in README. Windows CI remains a follow-up.
 
 ## 4. Expose new Kit capabilities through Clojure
@@ -61,11 +62,13 @@ These are additive API tasks, separate from getting existing applications onto 0
 
 Verify these through existing wrappers; do not reimplement the upstream fixes locally. Scope the tests to our integration rather than duplicating the entire Kit suite.
 
-- [ ] Editor search reopening, active-match preservation and reveal after scrolling; pending highlighting after language changes.
-- [ ] Markdown hard/soft breaks, replacing documents with equal block counts, and text-selection autoscroll stopping on release.
-- [ ] Selected ghost-button appearance, accessible Select activation, dialog close-button and calendar item accessibility.
-- [ ] Resizable-panel behavior, list measurement with a missing configured row, and missing-default-monospace-font fallback.
-- [ ] Confirm any existing font workaround still has a reproducible reason before removing it; the release does not establish that our glyph-clipping issue is fixed.
+- [x] Editor search reopening and active-match preservation use retained production state; search navigation exercises Kit's reveal path, and a live Clojure-to-Rust language change refreshes the same editor before the Metal syntax fixture is captured.
+- [x] Markdown hard/soft breaks and replacement with equal block counts are covered by an isolated third Metal capture.
+- [ ] Add a production-wrapper drag/release case for Markdown text-selection autoscroll stopping on release.
+- [x] Selected ghost-button appearance, accessible Select activation, dialog close-button behavior, and calendar-day accessibility/selection are covered by Metal and production headless fixtures.
+- [x] Resizable panels retain their state and report two nonzero laid-out sizes; shrinking List/DataTable fixtures clear a configured selection whose row disappeared.
+- [ ] Add a deterministic production-wrapper fixture that removes the configured default monospace font and proves fallback rendering.
+- [x] Keep the TodoMVC title font workaround. The resolved renderer remains `gpui-pre` 0.3.3, and the fresh native TodoMVC capture still exercises the workaround; this Kit release does not change the underlying macOS glyph-edge-clipping cause.
 
 ## 6. Documentation and completion
 
@@ -76,10 +79,10 @@ Verify these through existing wrappers; do not reimplement the upstream fixes lo
 
 ## Validation result
 
-- `./scripts/ci.sh`: passed — 299 Rust tests; 114 Clojure tests / 1,295 assertions; cljfmt; normal debug host build; socket protocol test. Production headless coverage includes accessible Select keyboard activation with exactly one commit callback.
-- `cargo test --locked --manifest-path host/Cargo.toml --test rendering`: passed twice on macOS with the real offscreen Metal renderer. One intervening launch exited during a transient `com.apple.hiservices-xpcservice` connection failure; CI intentionally does not convert that into a skip.
+- `./scripts/ci.sh`: passed — 307 Rust tests; 114 Clojure tests / 1,295 assertions; cljfmt; normal debug host build; socket protocol test. Production headless coverage now contains ten renderer interaction/layout tests plus the deferred-sheet regression.
+- `cargo test --locked --manifest-path host/Cargo.toml --test rendering`: passed on macOS with the real offscreen Metal renderer. It now reports three checks, including isolated equal-block Markdown replacement. One earlier launch exited during a transient `com.apple.hiservices-xpcservice` connection failure; CI intentionally does not convert that into a skip.
 - `cargo tree --locked --manifest-path host/Cargo.toml -d`: no incompatible duplicate GPUI family.
-- Native Command & Capture smoke passed after launching all four approved examples from their project directories. Fresh post-action captures verified Counter increment/reset; TodoMVC focused Unicode entry, submit, toggle, and delete; Widgets navigation, Select keyboard commit, Clojure editor auto-pairing, and frontmatter rendering; and Catppuccin theme switching, checkbox input, and focused Unicode typing. Window titlebars and capture also remained healthy. Native menu traversal, composed-text IME, and packaged-app behavior remain in the broader native-window follow-up above.
+- Native Command & Capture smoke passed after launching all four approved examples from their project directories. Fresh post-action captures verified Counter increment/reset; TodoMVC focused Unicode entry, submit, toggle, and delete; Widgets navigation, Select keyboard commit, Clojure editor auto-pairing, frontmatter rendering, and a pointer-anchored native menu with keyboard traversal/selection of Word wrap; and Catppuccin theme switching, checkbox input, and focused Unicode typing. Window titlebars and capture also remained healthy. Composed-text IME and packaged-app behavior remain in the native-only follow-up above.
 - Linux keeps semantic headless coverage but no pixel renderer. Windows remains outside the current CI matrix.
 
 ## Sources and scope
