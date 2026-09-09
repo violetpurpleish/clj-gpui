@@ -407,7 +407,9 @@
 
   Strings and keywords become `{:id … :label …}`. Maps keep `:id`,
   `:label` / `:text`, `:disabled`, `:display` (select trigger copy, or
-  a bar-chart label), `:on-click`, and `:content`.   Nested `:items`
+  a bar-chart label), `:on-click`, and `:content`. `:icon-svg` is inline
+  UTF-8 SVG content. Sidebar rows also accept container `:style` and
+  text-only `:label-style`. Nested `:items`
   are menu submenus, tree children, or Select `SelectGroup` sections.
   Chart items also keep `:fill` (hex or a bar fill map), `:stroke`,
   `:stroke-style`, `:inner-radius`, `:outer-radius`, and `:label-lines`.
@@ -459,6 +461,9 @@
         (some? (:source x)) (assoc :source (wire-id (:source x)))
         (some? (:target x)) (assoc :target (wire-id (:target x)))
         (some? (:icon x)) (assoc :icon (wire-id (:icon x)))
+        (some? (:icon-svg x)) (assoc :icon-svg (str (:icon-svg x)))
+        (map? (:style x)) (assoc :style (:style x))
+        (map? (:label-style x)) (assoc :label-style (:label-style x))
         (seq (:keywords x)) (assoc :keywords
                                    (mapv (fn [k]
                                            (if (keyword? k) (wire-id k) (str k)))
@@ -629,8 +634,11 @@
   `:ghost`, `:link`, `:text`. `:outline` is a separate look.
 
   `:loading` is Kit `Button::loading` (inert, keeps its look). `:icon`
-  is a kebab icon name (empty `:text` is icon-button mode). `:tooltip`
-  is Kit `Button::tooltip` (not the generic wrapper). `:rounded` is
+  is any bundled Lucide kebab name (empty `:text` is icon-button mode),
+  or `:icon-svg` is inline UTF-8 SVG content. `:tooltip` is Kit
+  `Button::tooltip` (not the generic wrapper); `:tooltip-placement` may
+  be `:top`, `:right`, `:bottom`, or `:left` and invalid/omitted values
+  retain Kit's placement policy. `:rounded` is
   `:none` / `:small` / `:medium` / `:large` or a pixel number.
   `:dropdown-caret` (`:caret`) shows a caret. Explicit `:dropdown-caret`
   wins; `:caret` is never on the wire. `:toggled` is assistive
@@ -1230,7 +1238,9 @@
   `:menu-max-h` (px), `:search-placeholder`, `:empty` (string form of
   Kit `Select::empty`; Kit accepts arbitrary `IntoElement`), `:icon`,
   `:appearance`, `:focus-ring` (Kit `FocusableExt`; omit = Kit true),
-  `:accessibility-label`. Group titles are not selectable and are not
+  `:accessibility-label`. Kit 0.6.1's styled Select does not forward its
+  base dismiss event, so there is deliberately no `:on-dismiss`; selection
+  confirmation remains distinct from merely closing the menu. Group titles are not selectable and are not
   in the callback id map. Custom row/section `render` is not wrapped.
 
   (ui/select selected
@@ -1340,7 +1350,9 @@
                    opts))))
 
 (defn icon
-  "Bundled GPUI Kit icon. `name` is a kebab keyword such as `:check`.
+  "GPUI Kit icon. `name` may be any bundled Lucide kebab keyword such as
+  `:check` or `:accessibility`. `:icon-svg` supplies inline UTF-8 SVG and
+  takes precedence over `name`; malformed SVG is ignored safely.
 
   (ui/icon :star)
   (ui/icon :loader {:size :small})"
@@ -2609,8 +2621,14 @@
   "Code editor wrapping Kit `Editor` / `EditorState`. Not an LSP
   editor. `:language` is a highlighter name (`\"rust\"`, `\"json\"`,
   `\"markdown\"`, `\"clojure\"`; omitted is `\"text\"`). Kit's
-  `tree-sitter-languages` bundle and a Clojure grammar are enabled. `on-change`
-  receives the string. Kit chrome: `:appearance`, `:bordered` (omit =
+  `tree-sitter-languages` bundle and a Clojure grammar are enabled. Clojure
+  auto-pairs `()`, `[]`, `{}` and double quotes outside strings/comments,
+  and indents after opening delimiters. `:auto-close` and `:smart-indent`
+  default to true independently; explicit false is applied live without
+  replacing editor state. `on-change` receives the string. Multi-cursor
+  editing is native: Option-click adds a cursor, Option-drag makes a column
+  selection, and Cmd-Option-Up/Down adds a cursor vertically on macOS
+  (Ctrl-Option or Shift-Option Up/Down are cross-platform aliases). Kit chrome: `:appearance`, `:bordered` (omit =
   Kit true), `:readonly`, `:accessibility-label`. Custom `context_menu`
   builders are not wrapped.
 
@@ -2763,6 +2781,8 @@
 
 (defn markdown
   "Markdown `TextView`. `:selectable` is Kit text selection (omit = true).
+  `:frontmatter true` enables YAML frontmatter parsing and structured
+  rendering; omitted/false preserves ordinary Markdown behavior.
   `:height` or `:flex 1` makes it scroll.
 
   (ui/markdown \"# Hello\")
@@ -2782,7 +2802,9 @@
    (merge {:type :html :text (str (or text ""))} (or opts {}))))
 
 (defn sidebar
-  "App sidebar of `{id, label, icon?}` rows. `:side` is `:left` (default)
+  "App sidebar of `{id, label, icon?, icon-svg?, style?, label-style?}` rows.
+  `:style` applies to the item container and `:label-style` only to its label;
+  both preserve native selected/disabled state. `:side` is `:left` (default)
   or `:right`. `:collapsed` shrinks chrome. `:collapsible` is Kit
   `SidebarCollapsible`: `true` / `:icon` (default), `false` / `:none`,
   or `:offcanvas`. `:none` stays expanded and ignores `:collapsed`

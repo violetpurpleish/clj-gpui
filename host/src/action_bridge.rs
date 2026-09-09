@@ -158,7 +158,7 @@ fn push_native_item(menu: NativeMenu, item: &Item, slot: &str, prefix: &[String]
     path.push(item.id_or_label());
     let action = CljAction::new(slot, path).boxed();
     let label = item.label_or_id();
-    let icon = item.icon.as_deref().and_then(mapping::parse_icon);
+    let icon = mapping::icon_from_parts(item.icon.as_deref(), item.icon_svg.as_deref());
     match (native_leaf_kind(item), icon) {
         (NativeLeafKind::IconDisabled, Some(icon)) => {
             menu.menu_with_icon_disabled(label, icon, true, action)
@@ -186,7 +186,8 @@ pub(crate) enum NativeLeafKind {
 }
 
 pub(crate) fn native_leaf_kind(item: &Item) -> NativeLeafKind {
-    let has_icon = item.icon.as_deref().and_then(mapping::parse_icon).is_some();
+    let has_icon =
+        mapping::icon_from_parts(item.icon.as_deref(), item.icon_svg.as_deref()).is_some();
     let disabled = item.disabled;
     let checked = item.checked.unwrap_or(false);
     match (has_icon, disabled, checked) {
@@ -211,7 +212,7 @@ pub fn native_menu_should_show(was_open: bool, open: bool) -> bool {
 
 fn command_item(item: &Item, slot: &str, item_path: Vec<String>) -> CommandItem {
     let mut cmd = CommandItem::new().label(item.label_or_id());
-    if let Some(icon) = item.icon.as_deref().and_then(mapping::parse_icon) {
+    if let Some(icon) = mapping::icon_from_parts(item.icon.as_deref(), item.icon_svg.as_deref()) {
         cmd = cmd.icon(icon);
     }
     if item.checked.unwrap_or(false) {

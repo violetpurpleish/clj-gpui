@@ -11,7 +11,12 @@ cargo test --locked --manifest-path host/Cargo.toml
 echo "==> cargo build (debug host)"
 cargo build --locked --manifest-path host/Cargo.toml
 
-bin="${CLJ_GPUI_BIN:-$root/host/target/debug/clj-gpui}"
+target_dir="${CARGO_TARGET_DIR:-}"
+if [[ -z "$target_dir" ]]; then
+  metadata="$(cargo metadata --locked --manifest-path host/Cargo.toml --format-version 1 --no-deps)"
+  target_dir="$(printf '%s\n' "$metadata" | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
+fi
+bin="${CLJ_GPUI_BIN:-$target_dir/debug/clj-gpui}"
 if [[ ! -x "$bin" ]]; then
   echo "missing executable host binary: $bin" >&2
   exit 1

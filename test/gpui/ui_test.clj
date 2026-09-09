@@ -196,10 +196,29 @@
   (is (= 100 (:open (ui/option-item {:id :mon :label "Mon" :open 100 :close 105}))))
   (is (true? (:checked (ui/option-item {:id :notify :label "N" :checked true}))))
   (is (= "left" (:side (ui/option-item {:id :files :side :left :label "Files"}))))
+  (let [item (ui/option-item {:id :inbox :label "Inbox"
+                              :icon-svg "<svg><text>λ</text></svg>"
+                              :style {:padding 6}
+                              :label-style {:font-weight :bold}})]
+    (is (= "<svg><text>λ</text></svg>" (:icon-svg item)))
+    (is (= {:padding 6} (:style item)))
+    (is (= {:font-weight :bold} (:label-style item))))
   (is (= ["a" "b"] (mapv :id (ui/option-items [:a nil :b]))))
   (is (nil? (ui/option-item nil)))
   (is (= "ui/dark" (ui/wire-id :ui/dark)))
   (is (= "light" (ui/wire-id :light))))
+
+(deftest gpui-kit-061-options-pass-through
+  (let [button (ui/button "Help" {:tooltip "Explain"
+                                  :tooltip-placement :left
+                                  :icon-svg "<svg><text>λ</text></svg>"})]
+    (is (= :left (:tooltip-placement button)))
+    (is (= "<svg><text>λ</text></svg>" (:icon-svg button))))
+  (let [editor (ui/editor "(inc 1)" {:auto-close false :smart-indent false})]
+    (is (false? (:auto-close editor)))
+    (is (false? (:smart-indent editor))))
+  (is (true? (:frontmatter (ui/markdown "---\ntitle: Hello\n---" {:frontmatter true}))))
+  (is (= "accessibility" (:icon (ui/icon :accessibility)))))
 
 (deftest option-ids-preserve-original-clojure-identity
   (is (= :dark (ui/option-identity :dark)))

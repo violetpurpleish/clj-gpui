@@ -8,6 +8,8 @@ mod overlay;
 mod preview;
 mod protocol;
 mod renderer;
+#[cfg(test)]
+mod renderer_integration_tests;
 mod rows;
 mod syntax;
 
@@ -38,11 +40,14 @@ fn main() -> Result<()> {
     let http_client = reqwest_client::ReqwestClient::user_agent("clj-gpui/host")?;
 
     application()
-        .with_assets(gpui_kit_assets::Assets)
+        // 0.6.1 exposes the shared complete Lucide catalog. Clojure icon
+        // names may use any member, while Component's own defaults keep
+        // resolving from the same source.
+        .with_assets(gpui_kit_assets::AllAssets)
         .with_http_client(Arc::new(http_client))
         .run(move |cx| {
             gpui_kit::init(cx);
-            syntax::init();
+            syntax::init(cx);
             renderer::open_window(nrepl_port, cmd_tx, event_rx, cx);
         });
 

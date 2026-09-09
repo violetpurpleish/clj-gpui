@@ -27,7 +27,7 @@ use gpui_component::{
     input::InputState,
     plot::shape::{BarAlignment, SankeyAlign, SankeyLink, SankeyValueScale},
     setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
-    text::TextView,
+    text::{FrontmatterPlugin, MarkdownExtensions, TextView},
     v_flex, v_virtual_list,
 };
 use gpui_kit as gpui;
@@ -2330,6 +2330,11 @@ pub fn paint_markdown(node: &Node, key: &str) -> gpui::AnyElement {
     } else {
         TextView::markdown(SharedString::from(key.to_string()), body)
     };
+    if !html && node.frontmatter {
+        view = view
+            .markdown_extensions(MarkdownExtensions::default().frontmatter())
+            .plugin(FrontmatterPlugin::new());
+    }
     view = view.selectable(node.selectable.unwrap_or(true));
     if node.height.is_some() || node.flex.unwrap_or(0.0) >= 1.0 {
         view = view.scrollable(true);

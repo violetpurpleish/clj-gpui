@@ -113,6 +113,8 @@ struct InputSlot {
 struct TextControlSlot<S> {
     state: Entity<S>,
     language: Option<String>,
+    auto_close: bool,
+    smart_indent: bool,
     on_change: Option<String>,
     on_submit: Option<String>,
     on_blur: Option<String>,
@@ -1442,8 +1444,12 @@ impl RootView {
             return div().into_any_element();
         };
         match &slot.state {
-            SelectStateHandle::Flat(state) => finish_select(Select::new(state), node, cx),
-            SelectStateHandle::Grouped(state) => finish_select(Select::new(state), node, cx),
+            SelectStateHandle::Flat(state) => {
+                finish_select(Select::new(state).id(eid(key)), node, cx)
+            }
+            SelectStateHandle::Grouped(state) => {
+                finish_select(Select::new(state).id(eid(key)), node, cx)
+            }
         }
     }
 
@@ -1576,7 +1582,7 @@ impl RootView {
             "input" => {
                 let state = self.input_slot(&key, node, window, cx);
                 apply_style(
-                    mapping::apply_input_chrome(Input::new(&state), node),
+                    mapping::apply_input_chrome(Input::new(&state).id(eid(&key)), node),
                     node,
                     cx,
                 )
@@ -1752,7 +1758,8 @@ impl RootView {
     fn render_toggle(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
         let checked = node.checked.unwrap_or(false);
         let mut el = Toggle::new(eid(key)).checked(checked);
-        if let Some(icon) = node.icon.as_deref().and_then(mapping::parse_icon) {
+        if let Some(icon) = mapping::icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref())
+        {
             el = el.icon(icon);
         }
         if let Some(text) = node.text.clone() {
@@ -1799,7 +1806,9 @@ impl RootView {
                 {
                     toggle = toggle.label(label);
                 }
-                if let Some(icon) = item.icon.as_deref().and_then(mapping::parse_icon) {
+                if let Some(icon) =
+                    mapping::icon_from_parts(item.icon.as_deref(), item.icon_svg.as_deref())
+                {
                     toggle = toggle.icon(icon);
                 }
                 if item.disabled {
@@ -2566,7 +2575,9 @@ impl RootView {
             if item.disabled {
                 step = step.disabled(true);
             }
-            if let Some(icon) = item.icon.as_deref().and_then(mapping::parse_icon) {
+            if let Some(icon) =
+                mapping::icon_from_parts(item.icon.as_deref(), item.icon_svg.as_deref())
+            {
                 step = step.icon(icon);
             }
             stepper = stepper.item(step);
@@ -2593,9 +2604,10 @@ impl RootView {
             .as_deref()
             .or(node.text.as_deref())
             .unwrap_or("check");
-        let icon = mapping::parse_icon(name).unwrap_or(IconName::Asterisk);
+        let icon = mapping::icon_from_parts(Some(name), node.icon_svg.as_deref())
+            .unwrap_or_else(|| Icon::new(IconName::Asterisk));
         apply_style(
-            Icon::new(icon).with_size(mapping::parse_scale(node.control_size.as_deref())),
+            icon.with_size(mapping::parse_scale(node.control_size.as_deref())),
             node,
             cx,
         )
@@ -2719,7 +2731,7 @@ impl RootView {
             let id = item.id_or_label();
             let title = item.label_or_id();
             let is_open = open_ids.iter().any(|open| open == &id);
-            let icon = item.icon.as_deref().and_then(mapping::parse_icon);
+            let icon = mapping::icon_from_parts(item.icon.as_deref(), item.icon_svg.as_deref());
             let content = if let Some(child) = item.content.as_ref() {
                 self.render_node(child, &format!("{path}-acc-{ix}"), window, cx)
             } else {
@@ -4023,7 +4035,9 @@ impl RootView {
         if let Some(title) = spec.node.title.clone() {
             note = note.title(title);
         }
-        if let Some(icon) = spec.node.icon.as_deref().and_then(mapping::parse_icon) {
+        if let Some(icon) =
+            mapping::icon_from_parts(spec.node.icon.as_deref(), spec.node.icon_svg.as_deref())
+        {
             note = note.icon(icon);
         }
         if let Some(placement) = mapping::parse_anchor(spec.node.placement.as_deref()) {
@@ -4264,8 +4278,9 @@ impl RootView {
         if let Some(label) = node.text.clone().or(node.title.clone()) {
             picker = picker.label(label);
         }
-        if let Some(name) = node.icon.as_deref().and_then(mapping::parse_icon) {
-            picker = picker.icon(Icon::new(name));
+        if let Some(icon) = mapping::icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref())
+        {
+            picker = picker.icon(icon);
         }
         if let Some(label) = node
             .accessibility_label
@@ -4453,6 +4468,8 @@ impl RootView {
     ) -> Entity<EditorState> {
         self.used_editors.insert(key.to_string());
         let language = extra::editor_language(node);
+        let auto_close = node.auto_close.unwrap_or(true);
+        let smart_indent = node.smart_indent.unwrap_or(true);
         let wanted = node.text.clone().unwrap_or_default();
         if let Some(slot) = self.editors.get_mut(key) {
             let id_changed = slot.on_change != node.on_change;
@@ -4475,6 +4492,18 @@ impl RootView {
                     input.refresh(cx);
                 });
             }
+            if slot.auto_close != auto_close {
+                slot.auto_close = auto_close;
+                state.update(cx, |input, cx| {
+                    input.set_auto_close(auto_close, window, cx);
+                });
+            }
+            if slot.smart_indent != smart_indent {
+                slot.smart_indent = smart_indent;
+                state.update(cx, |input, cx| {
+                    input.set_smart_indent(smart_indent, window, cx);
+                });
+            }
             if refresh {
                 Self::schedule_input_change_flush(key.to_string(), TextFlush::Editor, window, cx);
             }
@@ -4484,6 +4513,8 @@ impl RootView {
         let state = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language(language.clone())
+                .auto_close(auto_close)
+                .smart_indent(smart_indent)
                 .placeholder(placeholder)
                 .default_value(wanted)
         });
@@ -4492,6 +4523,8 @@ impl RootView {
             TextControlSlot {
                 state: state.clone(),
                 language: Some(language),
+                auto_close,
+                smart_indent,
                 on_change: node.on_change.clone(),
                 on_submit: node.on_submit.clone(),
                 on_blur: node.on_blur.clone(),
@@ -4599,6 +4632,8 @@ impl RootView {
             TextControlSlot {
                 state: state.clone(),
                 language: None,
+                auto_close: true,
+                smart_indent: true,
                 on_change: node.on_change.clone(),
                 on_submit: node.on_submit.clone(),
                 on_blur: node.on_blur.clone(),
@@ -4881,8 +4916,17 @@ impl RootView {
                 let id = item.id_or_label();
                 let mut row = SidebarMenuItem::new(item.label_or_id())
                     .active(selected.as_deref() == Some(id.as_str()))
-                    .collapsed(collapsed);
-                if let Some(icon) = item.icon.as_deref().and_then(mapping::parse_icon) {
+                    .collapsed(collapsed)
+                    .disable(item.disabled);
+                if let Some(style) = item.style.as_deref() {
+                    row = mapping::apply_styled(row, style);
+                }
+                if let Some(style) = mapping::style_refinement(item.label_style.as_deref()) {
+                    row = row.label_style(style);
+                }
+                if let Some(icon) =
+                    mapping::icon_from_parts(item.icon.as_deref(), item.icon_svg.as_deref())
+                {
                     row = row.icon(icon);
                 }
                 let cmd_tx = cmd_tx.clone();
@@ -5724,8 +5768,8 @@ where
     if let Some(enabled) = node.focus_ring {
         select = select.focus_ring(enabled);
     }
-    if let Some(name) = node.icon.as_deref().and_then(mapping::parse_icon) {
-        select = select.icon(Icon::new(name));
+    if let Some(icon) = mapping::icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref()) {
+        select = select.icon(icon);
     }
     if let Some(label) = node
         .accessibility_label
@@ -5871,8 +5915,8 @@ where
     if let Some(enabled) = node.focus_ring {
         combo = combo.focus_ring(enabled);
     }
-    if let Some(name) = node.icon.as_deref().and_then(mapping::parse_icon) {
-        combo = combo.icon(Icon::new(name));
+    if let Some(icon) = mapping::icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref()) {
+        combo = combo.icon(icon);
     }
     if let Some(name) = node.check_icon.as_deref().and_then(mapping::parse_icon) {
         combo = combo.check_icon(Icon::new(name));

@@ -87,3 +87,15 @@ jobs:
 
       - name: Tests
         run: ./scripts/ci.sh
+
+      - name: Production renderer pixel checks
+        if: runner.os == 'macOS'
+        run: cargo test --locked --manifest-path host/Cargo.toml --test rendering
+
+      - name: Upload Metal failure images
+        if: failure() && runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          name: clj-gpui-metal-failures
+          path: /private/tmp/clj-gpui-rendering-*.png
+          if-no-files-found: ignore
