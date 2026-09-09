@@ -1,0 +1,6 @@
+{:name "todomvc"
+ :version "0.1.0"
+ :main todomvc.app/app
+ :id "com.violetpurpleish.clj-gpui.todomvc"
+ :title "TodoMVC"
+ :description "The clj-gpui TodoMVC example"}

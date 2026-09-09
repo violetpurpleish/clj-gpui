@@ -531,7 +531,7 @@ JSON still works: put extra theme-set files (same schema as [GPUI Kit themes](ht
 
 ## Packaging
 
-A packaged app is still two processes: a bundled JRE running `gpui.prod`, plus the bundled GPUI host. `gpui.prod` does **not** start nREPL, watch source, or invoke Cargo.
+A packaged app is still two processes: a bundled JRE running `gpui.prod`, plus the bundled GPUI host. `gpui.prod` does **not** start nREPL, watch source, or invoke Cargo, and it always suppresses the development footer and FPS HUD even when the application uses `:chrome :dev` locally.
 
 In the application repo, add `gpui.edn`:
 
@@ -559,6 +559,14 @@ Then, on the target OS:
 
 ```bash
 clj -X:build package
+```
+
+The project template and every checked-in example already contain a `gpui.edn` and this build alias. For a packaged-app smoke test on macOS:
+
+```bash
+cd examples/widgets
+clj -X:build package
+open target/package/widgets.app
 ```
 
 Use `-X` (not `-T`): `gpui.package` lives in the clj-gpui library, so the project deps must stay on the classpath. `-T` would replace them. `clj -X:build` with `:exec-fn gpui.package/package` is the same default.

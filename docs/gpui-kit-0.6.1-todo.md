@@ -42,7 +42,8 @@ Use the [tagged testing guide](https://github.com/longbridge/gpui-kit/blob/v0.6.
 - [x] Use the real offscreen Metal renderer on a fixed production `RootView` fixture containing label glyph edges, highlighted Clojure editor text, a selected ghost button, Markdown inline code/hard break, and frontmatter. The fixture checks determinism and a visible state change; failures save PNGs under `/private/tmp` for CI upload.
 - [x] Make the macOS target fail when Metal is unavailable. Other platforms print an explicit unsupported/skipped message and do not substitute semantic snapshots.
 - [x] Retain native-window smoke checks for titlebars, menus, capture, and real focus. Command & Capture now also verifies the Widgets native menu opens beside its trigger, accepts keyboard traversal, dispatches Word wrap, closes, and updates its checkmark.
-- [ ] Add dedicated composed-text IME and packaged-`.app` smoke runs. These remain genuinely native-only; semantic and Metal headless tests do not stand in for them.
+- [ ] Add a dedicated composed-text IME smoke run; semantic and Metal headless tests do not stand in for it.
+- [x] Package the Widgets example with `clj -X:build package` and smoke-test the resulting `.app`. `gpui.prod` forces app chrome so the bundle cannot ship the development footer or FPS HUD even when the source tree requests `:chrome :dev` locally.
 - [x] Document exact local commands in README. Windows CI remains a follow-up.
 
 ## 4. Expose new Kit capabilities through Clojure
@@ -79,10 +80,11 @@ Verify these through existing wrappers; do not reimplement the upstream fixes lo
 
 ## Validation result
 
-- `./scripts/ci.sh`: passed — 307 Rust tests; 114 Clojure tests / 1,295 assertions; cljfmt; normal debug host build; socket protocol test. Production headless coverage now contains ten renderer interaction/layout tests plus the deferred-sheet regression.
+- `./scripts/ci.sh`: passed — 307 Rust tests; 116 Clojure tests / 1,330 assertions; cljfmt; normal debug host build; socket protocol test. Production headless coverage now contains ten renderer interaction/layout tests plus the deferred-sheet regression.
 - `cargo test --locked --manifest-path host/Cargo.toml --test rendering`: passed on macOS with the real offscreen Metal renderer. It now reports three checks, including isolated equal-block Markdown replacement. One earlier launch exited during a transient `com.apple.hiservices-xpcservice` connection failure; CI intentionally does not convert that into a skip.
 - `cargo tree --locked --manifest-path host/Cargo.toml -d`: no incompatible duplicate GPUI family.
-- Native Command & Capture smoke passed after launching all four approved examples from their project directories. Fresh post-action captures verified Counter increment/reset; TodoMVC focused Unicode entry, submit, toggle, and delete; Widgets navigation, Select keyboard commit, Clojure editor auto-pairing, frontmatter rendering, and a pointer-anchored native menu with keyboard traversal/selection of Word wrap; and Catppuccin theme switching, checkbox input, and focused Unicode typing. Window titlebars and capture also remained healthy. Composed-text IME and packaged-app behavior remain in the native-only follow-up above.
+- Native Command & Capture smoke passed after launching all four approved examples from their project directories. Fresh post-action captures verified Counter increment/reset; TodoMVC focused Unicode entry, submit, toggle, and delete; Widgets navigation, Select keyboard commit, Clojure editor auto-pairing, frontmatter rendering, and a pointer-anchored native menu with keyboard traversal/selection of Word wrap; and Catppuccin theme switching, checkbox input, and focused Unicode typing. Window titlebars and capture also remained healthy. Composed-text IME remains in the native-only follow-up above.
+- `cd examples/widgets && clj -X:build package`: produced a 142 MB ARM64 `target/package/widgets.app` with a valid plist, bundled release host, jlink runtime, application config, and uberjar. LaunchServices and fresh Command & Capture captures verified the packaged window has no FPS/nREPL development chrome and that a switch click still rerenders through the bundled production bridge.
 - Linux keeps semantic headless coverage but no pixel renderer. Windows remains outside the current CI matrix.
 
 ## Sources and scope

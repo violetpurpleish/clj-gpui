@@ -6,6 +6,19 @@
             [gpui.runtime :as runtime]
             [gpui.ui :as ui]))
 
+(deftest production-mode-forces-app-chrome-on-exported-roots
+  (try
+    (runtime/set-production-mode! false)
+    (is (= "dev" (:chrome (runtime/export-tree (ui/window {:chrome :dev})))))
+    (is (nil? (:chrome (runtime/export-tree (ui/window)))))
+
+    (runtime/set-production-mode! true)
+    (is (= "app" (:chrome (runtime/export-tree (ui/window {:chrome :dev})))))
+    (is (= "app" (:chrome (runtime/export-tree (ui/window)))))
+    (is (= "app" (:chrome (runtime/export-tree (ui/vstack {})))))
+    (finally
+      (runtime/set-production-mode! false))))
+
 (def ^:private widgets-file
   (io/file "test/gpui/reload_probe/widgets.clj"))
 

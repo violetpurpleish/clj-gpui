@@ -674,7 +674,8 @@
 
   `:title` is the OS window title (default `clj-gpui`).
   `:chrome :dev` (default) shows the nREPL footer and the `gpui-fps`
-  HUD; `:chrome :app` hides host chrome.
+  HUD; `:chrome :app` hides host chrome. The packaged `gpui.prod`
+  runtime always uses app chrome, regardless of this development setting.
   `:width` / `:height` are the native window size in pixels
   (`:window-width` / `:window-height` are accepted as aliases).
   Those size keys are not layout: children fill the window.

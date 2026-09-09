@@ -1,5 +1,6 @@
 (ns gpui.package-test
-  (:require [clojure.java.io :as io]
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [gpui.package :as pkg]))
@@ -29,6 +30,27 @@
                               :host (io/file "/tmp/host")})]
     (is (= jar (:jar cfg)))
     (is (= "demo" (:name cfg)))))
+
+(deftest template-and-examples-include-packaging-entry-points
+  (doseq [[dir expected-name expected-main]
+          [["template" "my-app" "my.app/app"]
+           ["examples/counter" "counter" "counter.app/app"]
+           ["examples/todomvc" "todomvc" "todomvc.app/app"]
+           ["examples/widgets" "widgets" "widgets.app/app"]
+           ["examples/themes/catppuccin-violet"
+            "catppuccin-violet"
+            "catppuccin-violet.app/app"]]]
+    (let [deps (edn/read-string (slurp (io/file dir "deps.edn")))
+          cfg (pkg/load-config {:file (.getPath (io/file dir "gpui.edn"))})]
+      (is (= expected-name (:name cfg)) dir)
+      (is (= expected-main (:main cfg)) dir)
+      (is (seq (:id cfg)) dir)
+      (is (= "0.10.10"
+             (get-in deps [:aliases :build :extra-deps
+                           'io.github.clojure/tools.build :mvn/version]))
+          dir)
+      (is (= 'gpui.package (get-in deps [:aliases :build :ns-default])) dir)
+      (is (= 'gpui.package/package (get-in deps [:aliases :build :exec-fn])) dir))))
 
 (deftest info-plist-contains-identity
   (let [plist (pkg/info-plist {:name "cljdu"
