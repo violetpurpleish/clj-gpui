@@ -62,20 +62,10 @@ runs the missing-default-monospace fixture in a separate executable so Kit's
 process-global font cache starts clean. Keep native-window smoke tests for titlebars,
 OS menus, focus/IME, and window capture.
 
-For the native macOS composed-text smoke, launch the Widgets gallery, open
-**Text & number inputs**, clear and focus the Search field, then use a real input
-source composition. With the German input source, press the `^` dead key followed
-by `a` and verify that the committed `â` appears in the input, Search field, and
-textarea that share the example's Clojure atom. Append and delete one ordinary
-character to confirm editing continues after composition. Automation that inserts
-an already-finalized Unicode string is not a substitute for this marked-text path.
-
 The widget gallery has a sidebar of focused sections, with `ui/` function
 labels and short explanations above live examples. Look up those functions
 in `gpui.ui`, or follow the examples in `examples/widgets/src/widgets/app.clj`.
-State and testing controls sit in expandable sections. The gallery uses
-`:chrome :app` to keep the developer HUD out of the way; nREPL and hot reload
-remain available when launched with `-M:dev`.
+State and testing controls sit in expandable sections.
 
 Or from the repo root:
 
