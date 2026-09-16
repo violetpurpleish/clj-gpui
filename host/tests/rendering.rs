@@ -169,6 +169,66 @@ mod macos {
             panic!("equal-block Markdown replacement produced identical pixels");
         }
 
-        println!("rendering: 3 passed (production RootView, Metal)");
+        // Real image bytes through RootView and Kit Avatar: a Resource variant
+        // assertion alone cannot prove that the production avatar loads/paints.
+        let image_path = std::env::temp_dir().join(format!(
+            "clj-gpui-avatar-{} café #1.png",
+            std::process::id()
+        ));
+        image::RgbaImage::from_pixel(32, 32, image::Rgba([230, 40, 60, 255]))
+            .save(&image_path)
+            .expect("write local image fixture");
+        let file_url = gpui_kit::http_client::Url::from_file_path(&image_path).unwrap();
+        let children = [
+            ("local-path", "avatar", image_path.to_str().unwrap()),
+            ("local-url", "avatar", file_url.as_str()),
+            (
+                "attachment-path",
+                "attachment-media",
+                image_path.to_str().unwrap(),
+            ),
+            ("attachment-url", "attachment-media", file_url.as_str()),
+        ]
+        .map(|(id, kind, src)| {
+            json!({
+                "type": "vstack", "id": id, "width": 64, "height": 64,
+                "children": [{"type": kind, "src": src, "width": 64, "height": 64}]
+            })
+        });
+        event_tx
+            .send_blocking(protocol::HostEvent::Tree(
+                serde_json::from_value(json!({
+                    "type": "window", "chrome": "app", "theme": "light",
+                    "padding": 20, "gap": 12, "children": children
+                }))
+                .unwrap(),
+                None,
+                vec![],
+            ))
+            .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle.into(), |_, window, cx| window.render_frame(cx))
+            .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle.into(), |_, window, cx| window.render_frame(cx))
+            .unwrap();
+        let avatars = cx.capture_screenshot(handle.into()).unwrap();
+        let scale = cx
+            .update_window(handle.into(), |_, window, _| window.scale_factor())
+            .unwrap();
+        // HeadlessAppContext captures actual pixels, without TestAppContext's
+        // semantic observer. Sample the center of each fixed 64px image slot.
+        for row in 0..4 {
+            let center_x = 20. + 32.;
+            let center_y = 20. + row as f32 * (64. + 12.) + 32.;
+            let pixel = avatars.get_pixel((center_x * scale) as u32, (center_y * scale) as u32);
+            if pixel.0[..3] != [230, 40, 60] {
+                save_failure("avatar-local-sources", &avatars);
+                panic!("local image row {row} did not paint fixture pixels: {pixel:?}");
+            }
+        }
+        std::fs::remove_file(image_path).unwrap();
+
+        println!("rendering: 4 passed (production RootView, Metal)");
     }
 }

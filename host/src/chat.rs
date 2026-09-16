@@ -755,8 +755,8 @@ fn render_attachment_media<P: NodePainter>(p: &mut P, node: &Node, path: &str) -
     if let Some(size) = mapping::parse_named_size(node.control_size.as_deref()) {
         media = media.with_size(size);
     }
-    if let Some(src) = node.src.clone().filter(|s| !s.is_empty()) {
-        media = media.src(src);
+    if let Some(src) = node.src.as_deref().filter(|s| !s.is_empty()) {
+        media = media.src(mapping::image_source(src));
     }
     for (index, child) in node.children.iter().enumerate() {
         let child_path = child_path(path, index);

@@ -63,7 +63,7 @@ pub fn node_key(node: &Node, path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-/// Kit `Avatar` from a node. Image `src` is an http URL or file path.
+/// Kit `Avatar` from a node, with URL, filesystem, or embedded image sources.
 pub fn kit_avatar(node: &Node) -> Avatar {
     let mut avatar = Avatar::new().with_size(mapping::parse_scale(node.control_size.as_deref()));
     if let Some(name) = node
@@ -75,7 +75,7 @@ pub fn kit_avatar(node: &Node) -> Avatar {
         avatar = avatar.name(name);
     }
     if let Some(src) = node.src.as_deref().filter(|s| !s.is_empty()) {
-        avatar = avatar.src(src.to_string());
+        avatar = avatar.src(mapping::image_source(src));
     }
     if let Some(icon) = mapping::icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref()) {
         avatar = avatar.placeholder(icon);

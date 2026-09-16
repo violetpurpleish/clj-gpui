@@ -4,8 +4,8 @@ use crate::catalog;
 use crate::protocol::{ButtonCustomVariantSpec, Node, StyledKeys};
 use chrono::Weekday;
 use gpui::{
-    AnyElement, App, Axis, FontWeight, Hsla, IntoElement, Keystroke, Role, StyleRefinement, Styled,
-    div, px,
+    AnyElement, App, Axis, FontWeight, Hsla, ImageSource, IntoElement, Keystroke, Role,
+    StyleRefinement, Styled, div, px,
 };
 use gpui_component::{
     Colorize as _, Disableable as _, FocusableExt as _, Icon, IconName, Placement, RoleOverride,
@@ -37,7 +37,29 @@ use gpui_kit as gpui;
 use gpui_kit::component as gpui_component;
 use serde_json::Value;
 use std::ops::Range;
+use std::path::Path;
 use std::time::Duration;
+
+/// Resolve the string wire format without changing GPUI's embedded-asset names.
+/// Absolute and explicitly relative paths are filesystem resources. Bare names
+/// (including `images/avatar.png`) retain GPUI's embedded-asset interpretation;
+/// use `./images/avatar.png` to request a relative filesystem path.
+pub(crate) fn image_source(src: &str) -> ImageSource {
+    let path = Path::new(src);
+    let explicit_relative = src.starts_with("./")
+        || src.starts_with("../")
+        || (cfg!(windows) && (src.starts_with(".\\") || src.starts_with("..\\")));
+    if path.is_absolute() || explicit_relative {
+        return path.into();
+    }
+    if let Ok(url) = gpui::http_client::Url::parse(src)
+        && url.scheme() == "file"
+        && let Ok(path) = url.to_file_path()
+    {
+        return path.into();
+    }
+    src.into()
+}
 
 pub fn parse_scale(value: Option<&str>) -> Size {
     match value.map(catalog::normalize) {
@@ -1570,6 +1592,65 @@ mod tests {
     use super::*;
     use gpui_component::Sizable;
     use serde_json::json;
+    #[test]
+    fn image_sources_distinguish_files_urls_and_embedded_assets() {
+        use gpui::Resource;
+
+        let absolute = std::env::temp_dir().join("image source café #1.png");
+        let file_url = gpui::http_client::Url::from_file_path(&absolute).unwrap();
+        for src in [absolute.to_str().unwrap(), file_url.as_str()] {
+            let ImageSource::Resource(Resource::Path(path)) = image_source(src) else {
+                panic!("expected a filesystem source for {src}");
+            };
+            assert_eq!(path.as_ref(), absolute.as_path());
+        }
+        for src in ["./images/avatar.png", "../images/avatar.png"] {
+            let ImageSource::Resource(Resource::Path(path)) = image_source(src) else {
+                panic!("expected an explicit relative filesystem source for {src}");
+            };
+            assert_eq!(path.as_ref(), Path::new(src));
+        }
+        for src in ["avatar.png", "images/avatar.png", "icons/user.svg"] {
+            let ImageSource::Resource(Resource::Embedded(name)) = image_source(src) else {
+                panic!("expected an embedded source for {src}");
+            };
+            assert_eq!(name.as_ref(), src);
+        }
+        for src in [
+            "https://example.com/images/avatar.png?size=80#profile",
+            "http://127.0.0.1:9876/avatar.png",
+            "data:image/png;base64,AA==",
+        ] {
+            let ImageSource::Resource(Resource::Uri(uri)) = image_source(src) else {
+                panic!("expected an unchanged URI source for {src}");
+            };
+            assert_eq!(uri.as_ref(), src);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn image_sources_accept_native_windows_paths_before_uri_detection() {
+        use gpui::Resource;
+
+        for src in [
+            r"C:\images\avatar.png",
+            r"\\server\share\avatar.png",
+            r".\avatar.png",
+            r"..\avatar.png",
+        ] {
+            let ImageSource::Resource(Resource::Path(path)) = image_source(src) else {
+                panic!("expected a Windows filesystem source for {src}");
+            };
+            assert_eq!(path.as_ref(), Path::new(src));
+        }
+        let ImageSource::Resource(Resource::Path(path)) =
+            image_source("file:///C:/images/avatar%20one.png")
+        else {
+            panic!("expected a Windows file URL to decode to a filesystem path");
+        };
+        assert_eq!(path.as_ref(), Path::new(r"C:\images\avatar one.png"));
+    }
 
     #[test]
     fn label_line_box_scales_with_font_instead_of_window_rem() {

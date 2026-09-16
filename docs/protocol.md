@@ -173,6 +173,14 @@ From a running `clj -M:dev` nREPL:
 
 Every node is a JSON object. Unknown fields are ignored by the host.
 
+Malformed field values report their path and expected type, for example
+`invalid UI tree from Clojure at children[0].disabled: invalid type: null, expected a boolean`.
+Boolean flags such as `disabled` accept `true` or `false`; omitting the flag
+uses its default. Clojure `nil` is JSON `null`, not `false`: use `(boolean value)`
+for truthy/nil application state. Nullable options retain their documented
+omission behavior. This diagnostic applies to all typed tree fields, including
+nested child nodes and collection items.
+
 | Field | Type | Used by |
 |---|---|---|
 | `type` | string | all (`window`, `label`, `button`, `vstack`, `hstack`, `spacer`, `checkbox`, `scroll`, `input`, `textarea`, `switch`, `toggle`, `toggle-group`, `radio-group`, `slider`, `progress`, `progress-circle`, `separator`, `spinner`, `tag`, `alert`, `skeleton`, `shimmer`, `kbd`, `link`, `group-box`, `badge`, `tabs`, `select`, `combobox`, `icon`, `clipboard`, `breadcrumb`, `avatar`, `avatar-group`, `accordion`, `description-list`, `dialog`, `alert-dialog`, `popover`, `hover-card`, `dropdown-menu`, `dropdown-button`, `context-menu`, `native-menu`, `command`, `status-bar`, `list`, `data-table`, `table`, `table-header`, `table-body`, `table-footer`, `table-row`, `table-head`, `table-cell`, `table-caption`, `tree`, `sheet`, `notification`, `number-input`, `otp-input`, `color-picker`, `date-picker`, `editor`, `virtual-list`, `chart`, `markdown`, `html`, `sidebar`, `settings`, `dock`, `resizable`, `rating`, `stepper`, `pagination`, `message`, `message-group`, `message-avatar`, `message-header`, `message-content`, `message-footer`, `bubble`, `bubble-content`, `bubble-group`, `bubble-reactions`, `attachment`, `attachment-media`, `attachment-media-overlay`, `attachment-content`, `attachment-title`, `attachment-description`, `attachment-actions`, `attachment-group`, `marker`, `marker-icon`, `marker-content`, `message-scroller`, `nav-stack`, `nav-page`) |
@@ -218,7 +226,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `interactive` | bool | `chart` `:line` / `:bar` / `:area` / `:radar`: Kit hover tooltip via `.id(...)`. Default false (Kit `id: None`). Not the string `tooltip` field |
 | `accessibility-label` | string | declarative `table`: Kit `Table::accessibility_label` (screen-reader name). A visible `table-caption` is not used as that name. `button` / `progress` / `progress-circle` / `switch` / Kit `checkbox` / `color-picker`: Kit `accessibility_label`. `input` / `textarea` / `editor`: Kit `aria_label`. Input also maps a present `id` to Kit `accessibility_id` |
 | `href` | string | `link` |
-| `src` | string | `avatar`: Kit `ImageSource` (http URL or file path). Empty/omitted is initials or the placeholder icon. Remote http URLs need the host HTTP client (installed at startup) |
+| `src` | string | `avatar` / `attachment-media`: http URL, platform-absolute filesystem path, local `file:` URL, or explicit relative path (`./` / `../`; Windows also `.\` / `..\`). Bare names such as `images/avatar.png` remain embedded asset names. Relative files resolve from the host working directory. Remote http URLs use the host HTTP client (installed at startup). Empty/omitted avatar source is initials or the placeholder icon |
 | `icon` | string | Any bundled Lucide kebab name for `icon`, `spinner`, `button`, `alert`, `badge`, `notification`, avatar placeholder, select/combobox trigger, menu/sidebar/stepper/accordion items; input/number-input prefix when `prefix` is omitted |
 | `icon-svg` | string | Inline UTF-8 SVG content for icon-bearing nodes/items. Valid SVG takes precedence over `icon`; malformed content is ignored and falls back to `icon` when present |
 | `auto-close`, `smart-indent` | bool | `editor`: independent Kit `EditorState` preferences. Omitted defaults true; explicit false and later changes update retained state |
@@ -310,7 +318,7 @@ Every node is a JSON object. Unknown fields are ignored by the host.
 | `truncate` | bool | GPUI `truncate()`: overflow hidden + nowrap + end ellipsis. Layout clip, not a character-count suffix. Not AvatarGroup `ellipsis`. Combined with `flex` ≥ 1, width still shrinks (`min_w_0`) but height stays the line box (no `min_h_0`) |
 | `whitespace` | string | GPUI whitespace: `nowrap` / `normal` |
 | `text-overflow` | string | GPUI text overflow: `ellipsis` / `ellipsis-start` / `ellipsis-middle` (path-friendly). Not AvatarGroup `ellipsis` |
-| `line-clamp` | number | GPUI `line_clamp` (max lines; also overflow-hidden) |
+| `line-clamp` | number | GPUI `line_clamp` (also overflow-hidden). The pinned GPUI shaper does not enforce a total line cap across explicit newlines; see [rendering boundaries](rendering-boundaries.md) |
 | `secondary` | string | `label`: Kit `Label::secondary` muted trailing text. With `masked`, folded into the bullet string (same count as Kit `full_text`) |
 | `highlights` | string | `label`: Kit `Label::highlights` search text. Omitted when `masked` (Kit 0.6 measures original-string byte ranges on U+2022 glyphs) |
 | `highlights-match` | string | `label`: `full` (default) or `prefix` |

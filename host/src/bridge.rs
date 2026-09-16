@@ -61,7 +61,15 @@ fn parse_tree(value: &Value) -> Result<(Node, Vec<gpui_component::theme::ThemeSe
     let tree = value
         .get("tree")
         .context("Clojure response missing :tree")?;
-    let node = serde_json::from_value(tree.clone()).context("invalid UI tree from Clojure")?;
+    // Include the field path and cause in Display, since every bridge caller
+    // sends errors to the native UI with `to_string()` (not the anyhow chain).
+    let node = serde_path_to_error::deserialize(tree).map_err(|err| {
+        anyhow::anyhow!(
+            "invalid UI tree from Clojure at {}: {}",
+            err.path(),
+            err.inner()
+        )
+    })?;
     let themes = catalog::theme_sets_from_value(value.get("themes"));
     Ok((node, themes))
 }
@@ -476,3 +484,64 @@ pub fn protocol_test() -> Result<()> {
 #[cfg(test)]
 #[path = "overlay_regression_tests.rs"]
 mod overlay_regression_tests;
+
+#[cfg(test)]
+mod tree_error_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_tree_reports_nested_field_and_type_in_the_error_event() {
+        for (tree, field, expected) in [
+            (
+                json!({"type": "window", "children": [
+                    {"type": "button", "disabled": null}
+                ]}),
+                "children[0].disabled",
+                "invalid type: null, expected a boolean",
+            ),
+            (
+                json!({"type": "select", "options": [
+                    {"id": "first", "disabled": "false"}
+                ]}),
+                "options[0].disabled",
+                "expected a boolean",
+            ),
+            (
+                json!({"type": "window", "children": [
+                    {"type": "label", "font-size": "large"}
+                ]}),
+                "children[0].font-size",
+                "expected f32",
+            ),
+        ] {
+            let (tx, rx) = async_channel::unbounded();
+            send_event(
+                &tx,
+                parse_tree(&json!({"ok": true, "tree": tree}))
+                    .map(|(node, themes)| HostEvent::Tree(node, None, themes)),
+            );
+            let HostEvent::Error(message) = rx.recv_blocking().unwrap() else {
+                panic!("invalid tree must send an error event");
+            };
+            assert!(message.contains(field), "{message}");
+            assert!(message.contains(expected), "{message}");
+        }
+    }
+
+    #[test]
+    fn valid_booleans_and_optional_nulls_keep_their_protocol_meaning() {
+        let (node, _) = parse_tree(&json!({"ok": true, "tree": {
+            "type": "window", "children": [
+                {"type": "button"},
+                {"type": "button", "disabled": false},
+                {"type": "button", "disabled": true},
+                {"type": "button", "focus-ring": null}
+            ]
+        }}))
+        .unwrap();
+        assert!(!node.children[0].disabled);
+        assert!(!node.children[1].disabled);
+        assert!(node.children[2].disabled);
+        assert_eq!(node.children[3].focus_ring, None);
+    }
+}

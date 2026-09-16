@@ -1,0 +1,96 @@
+# Rendering boundaries
+
+These findings apply to GPUI Kit / `gpui-component` 0.6.1 and `gpui-pre` 0.3.3,
+as pinned by `host/Cargo.lock`. They distinguish host mapping errors from
+upstream behavior; no dependency fork or application-specific renderer is used.
+
+## Image sources: clj-gpui
+
+Both Kit `Avatar::src` (`src/avatar/avatar.rs`) and `AttachmentMedia::src`
+(`src/attachment.rs`) accept `impl Into<ImageSource>`. GPUI's
+`src/elements/img.rs` implements string conversion as URI-or-embedded-asset,
+while `Path` / `PathBuf` conversion produces `Resource::Path`.
+`ImageAssetLoader::load` reads `Resource::Path` from disk, sends `Resource::Uri`
+through the HTTP client, and resolves `Resource::Embedded` through the asset
+provider. Consequently a filesystem path passed as a string does not read
+the file, and a `file:` string is not a substitute for the path conversion.
+
+The host now uses `mapping::image_source` for both public image consumers:
+
+| Source | GPUI resource |
+|---|---|
+| Platform-absolute path | Filesystem path |
+| `./image.png`, `../image.png` | Filesystem path relative to the host working directory |
+| Local `file:` URL | Decoded filesystem path, including spaces and Unicode |
+| Bare name such as `images/image.png` | Embedded asset, preserving GPUI string semantics |
+| Other URL | Existing GPUI URI behavior; HTTP(S) uses the host HTTP client |
+
+Windows native absolute paths and explicit `.\` / `..\` relative paths use the
+same filesystem rule. Source classification does not depend on whether a file
+currently exists and does not expand `~`; use an absolute path for a home directory.
+The rules also apply to avatar-group children and static renderer contexts.
+There is no general public `ui/image` API; that is a separate API addition.
+
+## Explicit-newline line clamping: GPUI
+
+The host's `mapping::apply_text_overflow` forwards `:line-clamp` to GPUI
+`Styled::line_clamp`. Kit `Label` preserves the text and forwards its style to
+GPUI text. The explicit-newline limitation is already present in GPUI's own
+`WindowTextSystem::shape_text` (`src/text_system.rs`, lines 525–653): it splits
+on `\n`, processes every resulting logical line, and counts wrap boundaries
+without counting each logical line itself. Even after the wrap budget is
+exhausted, later logical lines are still appended. `src/elements/text.rs`
+then sums all returned line heights during layout.
+
+A minimal upstream reproduction is to shape `"one\ntwo\nthree"` with a width
+large enough to avoid wrapping and `line_clamp: Some(2)`. All three logical
+lines are returned. Blank paragraph separators also consume layout height.
+This explains why a wrapped paragraph can respect the limit while multiple
+paragraphs exceed it. The host preserves the original text and GPUI semantics;
+an upstream fix should account for explicit line breaks as part of the global
+line budget and stop appending logical lines once it is exhausted.
+
+An independent bare-GPUI test was run with
+`cargo test --locked --manifest-path host/Cargo.toml --test upstream_line_clamp_repro -- --nocapture`
+using a temporary test target (removed after the investigation). It created an
+empty GPUI view, without Kit `Label` or the clj-gpui renderer, and called:
+
+```rust
+let runs = [window.text_style().to_run(text.len())];
+let lines = window.text_system().shape_text(
+    text.to_string().into(), px(16.), &runs, Some(px(320.)), Some(2),
+).unwrap();
+let count: usize = lines.iter().map(|line| line.wrap_boundaries.len() + 1).sum();
+```
+
+Observed output:
+
+```text
+bare GPUI: text="one\ntwo\nthree", clamp=2, logical_lines=3, displayed_lines=3
+bare GPUI: text="one\n\ntwo\n\nthree", clamp=2, logical_lines=5, displayed_lines=5
+```
+
+This reproduction is evidence of the pinned upstream limitation, not a
+regression assertion requiring future GPUI releases to retain the bug.
+
+## Boolean errors: clj-gpui diagnostics
+
+The protocol's non-nullable boolean flags remain strict. `:disabled nil`
+serializes to JSON null, which is not a boolean. Previously the bridge added
+the context `invalid UI tree from Clojure`, then converted the error to a string,
+losing its deserialization cause. `bridge::parse_tree` now includes the field
+path and cause directly in that string for all typed tree fields. For example:
+
+```text
+invalid UI tree from Clojure at children[0].disabled: invalid type: null, expected a boolean
+```
+
+Use `(boolean value)` when a Clojure expression produces truthy/nil state.
+Omitted flags and nullable options keep their existing behavior.
+
+## Custom button color: intentional Kit styling
+
+Kit `src/button/button.rs`, `ButtonVariant::outline_background` / `bg_color`, applies
+`colors.color.mix_oklab(cx.theme().transparent, 0.2)` for a custom variant's
+normal background. The host forwards the supplied custom variant. This
+intentional Kit color treatment remains unchanged.

@@ -573,7 +573,9 @@
   count. `:whitespace :nowrap` and `:text-overflow` (`:ellipsis`,
   `:ellipsis-start`, `:ellipsis-middle`) are the same GPUI text styles
   separately. `:overflow :hidden` / `:overflow-hidden true` clip the
-  box. `:line-clamp n` keeps at most n lines. A StatusBar region already
+  box. `:line-clamp n` forwards GPUI's line limit; the pinned GPUI version
+  does not cap the total when text contains explicit newlines (see
+  docs/rendering-boundaries.md). A StatusBar region already
   clips; put `:truncate true` (and `:flex 1` when the text should fill
   leftover width) on the label or shimmer. `:flex 1` with truncate
   shrinks on the width axis (`min_w_0`) and keeps line height — it does
@@ -1384,8 +1386,10 @@
           (with-option-callback opts items))))
 
 (defn avatar
-  "Avatar. Initials from `:name` or a string. `:src` is a Kit image
-  source (http URL or file path). Remote http URLs load through the
+  "Avatar. Initials from `:name` or a string. `:src` accepts http URLs,
+  absolute filesystem paths, local file URLs, and explicit relative
+  paths (`./` or `../`). Bare names such as `images/ada.png` retain
+  GPUI's embedded-asset meaning. Remote http URLs load through the
   host HTTP client. `:icon` is the placeholder when there is no image
   (Kit default User).
 
@@ -3150,7 +3154,8 @@
            :children (flatten-children children))))
 
 (defn attachment-media
-  "Attachment preview. `:src` is a Kit image (http URL or file path).
+  "Attachment preview. `:src` uses the same URL, filesystem-path, and
+  embedded-asset rules as `ui/avatar`; prefix relative files with `./`.
   Ordinary children are always `ParentElement::child`. Kit `.overlay`
   is `ui/attachment-media-overlay` or the named `:overlay` slot. Named
   `:size` becomes `:control-size`; omit it so media inherits the parent
