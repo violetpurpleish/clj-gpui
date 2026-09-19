@@ -157,6 +157,15 @@
   (let [n (ui/button "More" {:caret true :dropdown-caret false})]
     (is (false? (:dropdown-caret n)))
     (is (nil? (:caret n))))
+  (let [clicked (fn [])
+        n (ui/button "" clicked {:accessibility-label "Play episode"}
+                     (ui/icon :play)
+                     (ui/progress 40 {:width 36})
+                     (ui/label "9m"))]
+    (is (= clicked (:on-click n)))
+    (is (= "Play episode" (:accessibility-label n)))
+    (is (= [:icon :progress :label] (mapv :type (:children n))))
+    (is (= "9m" (get-in n [:children 2 :text]))))
   (let [n (ui/button "Delete" (fn [])
                      {:variant :custom
                       :custom-variant {:color "#b91c1c"

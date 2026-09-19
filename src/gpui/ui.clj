@@ -662,12 +662,17 @@
   to Kit a11y. `:loading-icon` is a kebab name (omit = Kit spinner).
   `:variant :custom` plus nested `:custom-variant` is Kit
   `ButtonCustomVariant` (`:color` / `:foreground` / `:hover` / `:active`
-  / `:shadow`). Nested hex `:color` is not host text color.
+  / `:shadow`). Nested hex `:color` is not host text color. A fourth and
+  later argument renders custom content inside the native button; use an
+  empty text label plus `:accessibility-label` when the children provide all
+  visible content.
 
   (ui/button \"+\" #(swap! count inc))
   (ui/button \"Save\" save! {:primary true})
   (ui/button \"Warn\" {:variant :warning :size :small})
   (ui/button \"More\" {:icon :chevron-down :dropdown-caret true})
+  (ui/button \"\" play! {:accessibility-label \"Play episode\"}
+    (ui/icon :play) (ui/progress 40 {:width 36}) (ui/label \"9m\"))
   (ui/button \"Delete\" delete! {:variant :custom
                                  :custom-variant {:color \"#b91c1c\"
                                                   :foreground \"#f8fafc\"
@@ -682,7 +687,11 @@
      {:type :button :text (str text) :on-click on-click}))
   ([text on-click style]
    (merge {:type :button :text (str text) :on-click on-click}
-          (button-style (or style {})))))
+          (button-style (or style {}))))
+  ([text on-click style & children]
+   (assoc (merge {:type :button :text (str text) :on-click on-click}
+                 (button-style (or style {})))
+          :children (flatten-children children))))
 
 (defn window
   "Native window. Return this from `app`. Only one makes sense.

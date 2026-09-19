@@ -1684,6 +1684,7 @@ impl RootView {
                 if let Some(label) = mapping::jump_button_visible_label(node) {
                     button = button.label(label.to_string());
                 }
+                button = button.children(self.render_children(node, path, window, cx));
                 let mut button = overlay::apply_button_chrome(button, node, Some(cx));
                 if node.on_click.is_some() {
                     let emit = Self::action_emitter(cx);
