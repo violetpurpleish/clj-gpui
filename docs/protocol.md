@@ -82,6 +82,8 @@ v11 adds `native-menu` (Clojure-owned semantic tree; host Kit `NativeMenu` snaps
 
 The 0.6.1 dependency update remains protocol v11 because every new field is additive and older v11 hosts safely ignore it. Added fields are editor `auto-close` / `smart-indent`, button `tooltip-placement`, inline `icon-svg`, Markdown `frontmatter`, and sidebar-item `style` / `label-style`. The styled Kit Select does not expose BaseSelect's dismiss event, so there is no misleading `on-dismiss` field.
 
+The 0.6.4 migration also remains protocol v11: dependencies and pie-radius rendering changed, with no wire fields or callback payload changes. See [migration notes](gpui-kit-0.6.4-migration.md).
+
 ## Host → Clojure ops
 
 Each request includes a unique numeric `id`. Clojure echoes it on the response.
@@ -382,7 +384,7 @@ for constructor shorthand details.
 | `fill-gradient` | bool, `bar`, `chart`, or two `{color,at}` stops | `chart` `:bar`: Kit `fill_gradient` (clears solid `fill`). Stop `at` is forwarded unclamped; Kit clips/interpolates |
 | `fill-gradient-mode` | string | `chart` `:bar`: `bar` (default) or `chart` when `fill-gradient` is true |
 | `inner-radius` | number | `chart` `:pie`: donut hole in pixels (Kit default 0). Also a per-slice item field for Kit `inner_radius_fn` |
-| `outer-radius` | number | `chart` `:pie` / `:radar`: pixels. Omitted pie paint forwards Kit's layout default (`height × 0.4`) because Kit's paint path still uses 0 and drops the ring. Also a per-slice item field for Kit `outer_radius_fn` |
+| `outer-radius` | number | `chart` `:pie` / `:radar`: pixels. Omitted pie radius uses Kit's actual laid-out height × 0.4 for paint and hit testing. Also a per-slice item field for Kit `outer_radius_fn`; when only some slices set it, other slices use the node radius or declared/default viewport height × 0.4 |
 | `pad-angle` | number | `chart` `:pie` |
 | `label-color` | hex string | `chart` `:pie` / `:radar` |
 | `label-line-color` | hex string | `chart` `:pie` leader lines |
@@ -426,7 +428,7 @@ for constructor shorthand details.
 
 Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-release` / `:on-submit` / `:on-double-click` / `:on-blur` / `:on-escape` / `:on-close` / `:on-copied` / `:on-ok` / `:on-cancel` / `:on-confirm` / `:on-select` / `:on-open-change` / `:on-forward-change` / `:on-query` / `:on-export` / `:on-sort` / `:on-load-more` with ids such as `"cb-2"`. Nested `:items` / `:options` / `:links` / `:series` / `:content` / `:trigger` / `:footer` / `:left` / `:right` are walked too. The registry is rebuilt on every export. `nav-stack` `:item` is a static recipe map (or `"slide"`), not a callback: phase and progress are per-frame and are applied by the host. A Clojure `:item` function is dropped as JSON `false` so it still suppresses `transition-style` rather than resurrecting `slide`.
 
-The native host paints these nodes with [GPUI Kit](https://gpui-kit.com) 0.6.1 (`gpui-kit` crate, `tree-sitter-languages`). Icon-bearing widgets load named SVGs from the complete `gpui-kit-assets` catalog or accept inline UTF-8 `icon-svg` content. See [gpui-component.md](gpui-component.md) for the coverage inventory.
+The native host paints these nodes with [GPUI Kit](https://gpui-kit.com) 0.6.4 (`gpui-kit` crate, `tree-sitter-languages`). Icon-bearing widgets load named SVGs from the complete `gpui-kit-assets` catalog or accept inline UTF-8 `icon-svg` content. See [gpui-component.md](gpui-component.md) for the coverage inventory.
 
 A `scroll` node is a vertical overflow viewport. Without `height`, the host gives it `flex: 1` and `min-height: 0` so it takes leftover space in a column instead of growing with its children. `height` is a fixed pixel viewport. `width` constrains the viewport; omitted, it fills the parent. `size` is a square viewport, matching other nodes (it wins over `width` / `height`). Visual styles (`padding`, `bg`, `border`, …) apply to the inner scroll body, not twice. `flex: 1` on other nodes also sets `min-height: 0`.
 

@@ -229,6 +229,67 @@ mod macos {
         }
         std::fs::remove_file(image_path).unwrap();
 
-        println!("rendering: 4 passed (production RootView, Metal)");
+        // The default pie radius must come from its actual layout, including
+        // a flex-filled viewport taller than chart_viewport's 180px fallback.
+        // Explicit and partial per-slice radii must still win.
+        for (name, outer, items, samples) in [
+            (
+                "pie-layout-radius",
+                None,
+                json!([{"label": "A", "value": 1, "color": "#e6283c"}]),
+                vec![(160., [230, 40, 60]), (0., [255, 255, 255])],
+            ),
+            (
+                "pie-explicit-radius",
+                Some(80.),
+                json!([{"label": "A", "value": 1, "color": "#e6283c"}]),
+                vec![(60., [230, 40, 60]), (160., [255, 255, 255])],
+            ),
+            (
+                "pie-slice-radius",
+                Some(80.),
+                json!([
+                    {"label": "A", "value": 1, "color": "#e6283c", "outer-radius": 130},
+                    {"label": "B", "value": 1, "color": "#2864e6"}
+                ]),
+                vec![
+                    (100., [230, 40, 60]),
+                    (-60., [40, 100, 230]),
+                    (-100., [255, 255, 255]),
+                ],
+            ),
+        ] {
+            let mut chart = json!({
+                "type": "chart", "id": "pie", "variant": "pie", "flex": 1,
+                "inner-radius": 40, "items": items
+            });
+            if let Some(radius) = outer {
+                chart["outer-radius"] = json!(radius);
+            }
+            event_tx
+                .send_blocking(protocol::HostEvent::tree(
+                    serde_json::from_value(json!({
+                        "type": "window", "chrome": "app", "theme": "light",
+                        "padding": 0, "gap": 0, "bg": "#ffffff", "children": [chart]
+                    }))
+                    .unwrap(),
+                    None,
+                    vec![],
+                ))
+                .unwrap();
+            cx.run_until_parked();
+            cx.update_window(handle.into(), |_, window, cx| window.render_frame(cx))
+                .unwrap();
+            let pie = cx.capture_screenshot(handle.into()).unwrap();
+            for (offset, expected) in samples {
+                let pixel = pie.get_pixel(((310. + offset) * scale) as u32, (250. * scale) as u32);
+                if pixel.0[..3] != expected {
+                    save_failure(name, &pie);
+                    panic!("{name} at x offset {offset}: expected {expected:?}, got {pixel:?}");
+                }
+            }
+        }
+
+        println!("rendering: 5 passed (production RootView, Metal)");
     }
 }

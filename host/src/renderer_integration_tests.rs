@@ -328,6 +328,92 @@ async fn production_select_is_accessible_and_commits_once(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+async fn production_searchable_select_reopens_with_all_options(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    for confirm in [false, true] {
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let (event_tx, event_rx) = async_channel::unbounded();
+        let handle = cx.open_window(size(px(480.), px(320.)), |window, cx| {
+            let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+            Root::new(view, window, cx)
+        });
+        assert!(matches!(cmd_rx.recv().unwrap(), Cmd::Render));
+        let tree = |value: &str| {
+            serde_json::from_value(json!({
+                "type": "window", "chrome": "app", "padding": 16,
+                "children": [{
+                    "type": "select", "id": "language", "value": value,
+                    "searchable": true, "on-change": "language-change",
+                    "options": [
+                        {"label": "JVM", "items": [{"id": "clj", "label": "Clojure"}]},
+                        {"label": "Systems", "items": [
+                            {"id": "rs", "label": "Rust"},
+                            {"id": "zig", "label": "Zig"}
+                        ]}
+                    ]
+                }]
+            }))
+            .unwrap()
+        };
+        event_tx
+            .send(HostEvent::tree(tree("clj"), None, vec![]))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.within("language").click("input", cx);
+            window.input("zig", cx);
+        })
+        .unwrap();
+        settle_root(handle, cx);
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.press(if confirm { "enter" } else { "escape" }, cx);
+        })
+        .unwrap();
+        settle_root(handle, cx);
+        let commands = drain(&cmd_rx);
+        if confirm {
+            assert_eq!(
+                callback_pairs(&commands),
+                vec![("language-change".into(), Some(json!("zig")))]
+            );
+        } else {
+            assert!(
+                callback_pairs(&commands).is_empty(),
+                "cancel must not change Clojure's value"
+            );
+        }
+        // Acknowledge the callback with the real controlled-tree path. The
+        // retained Select must keep the committed ID after clearing its filter.
+        event_tx
+            .send(HostEvent::tree(
+                tree(if confirm { "zig" } else { "clj" }),
+                callback_sequence(&commands),
+                vec![],
+            ))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        cx.update_window(handle.into(), |_, window, cx| {
+            assert_eq!(window.find("language").expanded(), Some(false));
+            assert_eq!(
+                window.find("language").value(),
+                Some(if confirm { "Zig" } else { "Clojure" })
+            );
+            window.within("language").click("input", cx);
+            window.press(if confirm { "up" } else { "down" }, cx);
+            window.press("enter", cx);
+        })
+        .unwrap();
+        settle_root(handle, cx);
+        assert_eq!(
+            callback_pairs(&drain(&cmd_rx)),
+            vec![("language-change".into(), Some(json!("rs")))]
+        );
+    }
+}
+
+#[gpui_kit::test]
 async fn production_slider_keeps_identity_and_controlled_value_across_tree_changes(
     cx: &mut TestAppContext,
 ) {

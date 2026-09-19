@@ -8,6 +8,8 @@ This is not a Clojure-like language, a Lisp-inspired DSL, or a toy interpreter. 
 
 There is no Clojars release yet. Depend on this repo with `:local/root` or a git SHA. GitHub Actions runs `./scripts/ci.sh` on Ubuntu and macOS (Rust unit plus production-renderer interaction tests, strict Clippy, Clojure tests, cljfmt, and the windowless socket protocol test). macOS additionally runs the explicit offscreen Metal pixel target.
 
+The host uses GPUI Kit 0.6.4 and GPUI 0.3.5. See the [migration notes](docs/gpui-kit-0.6.4-migration.md) for compatibility and validation details.
+
 ![screenshot](https://i.imgur.com/gKXfCnx.png)
 
 ## Quick start
