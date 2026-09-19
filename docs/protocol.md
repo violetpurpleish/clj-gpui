@@ -173,13 +173,30 @@ From a running `clj -M:dev` nREPL:
 
 Every node is a JSON object. Unknown fields are ignored by the host.
 
-Malformed field values report their path and expected type, for example
+The JSON protocol remains strict: non-nullable boolean flags such as `disabled`
+accept only `true` or `false`; omission uses the field's default. A raw JSON null
+still fails with a diagnostic such as
 `invalid UI tree from Clojure at children[0].disabled: invalid type: null, expected a boolean`.
-Boolean flags such as `disabled` accept `true` or `false`; omitting the flag
-uses its default. Clojure `nil` is JSON `null`, not `false`: use `(boolean value)`
-for truthy/nil application state. Nullable options retain their documented
-omission behavior. This diagnostic applies to all typed tree fields, including
-nested child nodes and collection items.
+Nullable boolean overrides accept null to retain their documented default or
+inheritance behavior. Native parse diagnostics cover all typed tree fields.
+
+Before JSON serialization, the Clojure runtime prepares boolean fields in the
+UI tree. Present `nil` becomes `false` for ordinary flags (`:disabled`, `:loading`,
+`:selected`, and the other non-nullable Node/Item boolean fields). Omitted keys
+stay omitted; constructor defaults such as searchable Combobox/Command remain
+unchanged. Nullable overrides such as `:focus-ring`, `:bordered`, `:auto-close`,
+and `:smart-indent` keep nil. All typed boolean fields reject other values with
+their location and Clojure type, for example
+`invalid UI boolean at children[0].disabled: expected true, false, or nil, got keyword`.
+The existing Clojure error view displays these errors.
+
+This is not general Clojure truthiness. Use `(boolean expression)` or a predicate
+such as `(contains? selected-ids id)` when an expression may return a keyword,
+string, or other truthy value. Typed traversal includes collection items, table
+cells/header groups, and type-less style maps. Arbitrary values and callback data
+are untouched; NavStack recipe styles and custom-variant shadow retain their
+nullable override semantics. See [rendering boundaries](rendering-boundaries.md)
+for constructor shorthand details.
 
 | Field | Type | Used by |
 |---|---|---|

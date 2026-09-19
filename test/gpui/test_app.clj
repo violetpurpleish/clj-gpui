@@ -13,4 +13,5 @@
      (ui/hstack
       {:gap 12}
       (ui/label (str "Count: " count) {:font-size 16})
-      (ui/button "+" #(swap! !state update :count inc))))))
+      (ui/button "+" #(swap! !state update :count inc)
+                 {:disabled nil :loading nil :selected nil :focus-ring nil})))))

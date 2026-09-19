@@ -181,6 +181,125 @@
 
 (declare sanitize)
 
+;; These are the non-nullable bool fields on protocol::Node / Item. Nullable
+;; overrides (Option<bool>) deliberately do not appear here. Keep the lists
+;; aligned with the schema; the boolean tests audit them against protocol.rs.
+(def ^:private node-boolean-flags
+  #{:primary :compact :strikethrough :truncate :shadow :focus :disabled
+    :dot :dashed :outline :selected :searchable :cleanable :multiple
+    :frontmatter :masked :readonly :mask-toggle :collapsed :range :loading
+    :overflow-hidden :reverse :once :ellipsis :has-more :dropdown-caret
+    :caret :banner :segmented})
+
+(def ^:private item-boolean-flags
+  #{:disabled :separator :expanded})
+
+(def ^:private node-boolean-overrides
+  #{:checked :interactive :filterable :bordered :focus-ring :open :overlay-closable
+    :autohide :auto-close :smart-indent :label-axis :value-axis :grid :labels :x-axis
+    :node-label :value-label :reuse-forward :appearance :content-inset :scrollbar
+    :jump-button :scroll-to-end :cell-selectable :row-header :stripe :sortable
+    :col-movable :col-resizable :col-fixed :loop-selection :row-selectable
+    :col-selectable :selectable :toggled :tab-stop :visible :close-button :keyboard
+    :overlay :resizable :menu})
+
+(def ^:private item-boolean-overrides
+  #{:selectable :resizable :movable :checked})
+
+(def ^:private styled-boolean-overrides
+  #{:strikethrough :shadow :truncate :overflow-hidden})
+
+(defn- field-path [path k]
+  (str path (when (seq path) ".") (name k)))
+
+(defn- prepare-boolean-fields
+  [m flags overrides path]
+  (reduce-kv
+   (fn [m k value]
+     (if (or (contains? flags k) (contains? overrides k))
+       (do
+         (when-not (or (nil? value) (boolean? value))
+           (let [location (field-path path k)
+                 value-type (cond
+                              (fn? value) "function"
+                              (keyword? value) "keyword"
+                              (string? value) "string"
+                              (number? value) "number"
+                              (map? value) "map"
+                              :else (.getSimpleName (class value)))]
+             (throw (ex-info (str "invalid UI boolean at " location
+                                  ": expected true, false, or nil, got " value-type)
+                             {:path location :value-type value-type}))))
+         (if (and (nil? value) (contains? flags k)) (assoc m k false) m))
+       m))
+   m m))
+
+(defn- map-typed-sequence [f xs path]
+  (if (sequential? xs)
+    (mapv (fn [i x] (f x (str path "[" i "]"))) (range) xs)
+    xs))
+
+(defn- update-typed [m k f path]
+  (if (contains? m k) (update m k f (field-path path k)) m))
+
+(defn- update-typed-sequence [m k f path]
+  (update-typed m k (partial map-typed-sequence f) path))
+
+(declare prepare-node-booleans)
+
+(defn- prepare-item-booleans [item path]
+  (if (map? item)
+    (let [item (-> (prepare-boolean-fields item item-boolean-flags item-boolean-overrides path)
+                   (update-typed-sequence :children prepare-node-booleans path)
+                   (update-typed-sequence :items prepare-item-booleans path)
+                   ;; A TableCell object is a Node even without a :type key.
+                   (update-typed-sequence :cells prepare-node-booleans path))]
+      (reduce (fn [m k] (update-typed m k prepare-node-booleans path))
+              item [:content :style :label-style]))
+    item))
+
+(defn- prepare-nav-case-booleans [recipe path]
+  (if (map? recipe)
+    (prepare-boolean-fields recipe #{} styled-boolean-overrides path)
+    recipe))
+
+(defn- prepare-nav-booleans [recipe path]
+  (cond
+    (map? recipe)
+    (-> (prepare-nav-case-booleans recipe path)
+        (update-typed-sequence :match prepare-nav-case-booleans path))
+    (sequential? recipe) (map-typed-sequence prepare-nav-case-booleans recipe path)
+    :else recipe))
+
+(defn- prepare-custom-variant-booleans [variant path]
+  (if (map? variant)
+    (prepare-boolean-fields variant #{} #{:shadow} path)
+    variant))
+
+(defn- prepare-node-booleans
+  "Prepare typed UI locations only. Opaque values, callback data and chart
+  payloads are never traversed. NavStack recipes/custom variants validate their
+  own nullable overrides, without applying ordinary Node flag defaults."
+  [node path]
+  (if (map? node)
+    (let [node (prepare-boolean-fields node node-boolean-flags node-boolean-overrides path)
+          node (reduce (fn [m k]
+                         (update-typed-sequence m k prepare-node-booleans path))
+                       node [:children :left :right])
+          node (reduce (fn [m k]
+                         (update-typed-sequence m k prepare-item-booleans path))
+                       node [:items :options :links :series])
+          node (-> node
+                   (update-typed :header-groups (partial map-typed-sequence
+                                                         (partial map-typed-sequence prepare-item-booleans)) path)
+                   (update-typed :item prepare-nav-booleans path)
+                   (update-typed :custom-variant prepare-custom-variant-booleans path))]
+      (reduce (fn [m k] (update-typed m k prepare-node-booleans path))
+              node [:trigger :footer :stack-style :shimmer-style :separator-style
+                    :content-style :list-style :row-style :jump-button-style
+                    :jump-button-renderer]))
+    node))
+
 (defn- sanitize-item
   [item]
   (if (map? item)
@@ -433,12 +552,17 @@
   [tree]
   (json-tree
    (sanitize
-    (if (and @production-mode* (map? tree))
-      (assoc tree :chrome :app)
-      tree))))
+    (prepare-node-booleans
+     (if (and @production-mode* (map? tree))
+       (assoc tree :chrome :app)
+       tree) ""))))
 
 (defn export-tree
-  "Build a UI tree, registering callbacks as string ids.
+  "Build a UI tree, preparing typed booleans and registering callbacks as ids.
+
+  Present nil ordinary flags become false; nullable overrides retain nil.
+  Invalid non-boolean values produce the existing Clojure error view with
+  the field path and value type. Opaque application data is not normalized.
 
   Zero-arity calls the application var. One-arity sanitizes an already
   built tree (or invokes a 0-arg function that returns one). A failed

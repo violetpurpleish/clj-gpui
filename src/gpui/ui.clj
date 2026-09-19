@@ -4,7 +4,12 @@
   These functions return ordinary Clojure maps. The native host
   translates that data into GPUI elements. Application logic stays
   in Clojure: atoms, functions, sequences, macros, and namespaces
-  are the real Clojure runtime."
+  are the real Clojure runtime.
+
+  At export, present nil ordinary boolean flags (such as :disabled)
+  become false. Nullable overrides (such as :focus-ring) keep nil,
+  and omitted keys keep their defaults. Other values are type errors;
+  use boolean or a predicate for non-boolean truthy state."
   (:refer-clojure :exclude [list]))
 
 (def protocol-version
@@ -402,6 +407,12 @@
     (some? fill) (str fill)
     :else fill))
 
+(defn- boolean-state
+  "Explicit controlled state: nil means false; all other values retain their
+  type so typed export validation can diagnose invalid non-boolean values."
+  [value]
+  (if (nil? value) false value))
+
 (defn option-item
   "Normalize a select/radio/tab/breadcrumb/accordion item to a map.
 
@@ -429,13 +440,15 @@
                :label (when (some? label) (str label))}
         (and (some? value) scalar-value?) (assoc :text (str value))
         (contains? x :text) (assoc :text (str (:text x)))
-        (true? (:disabled x)) (assoc :disabled true)
+        (contains? x :disabled) (assoc :disabled (boolean-state (:disabled x)))
+        (contains? x :separator) (assoc :separator (boolean-state (:separator x)))
+        (contains? x :expanded) (assoc :expanded (boolean-state (:expanded x)))
         (some? (:display x)) (assoc :display (str (:display x)))
         (fn? (:on-click x)) (assoc :on-click (:on-click x))
         (ui-node? content) (assoc :content content)
         (and (some? content) (not (ui-node? content)))
         (assoc :content (first (flatten-children [content])))
-        (contains? x :checked) (assoc :checked (boolean (:checked x)))
+        (contains? x :checked) (assoc :checked (:checked x))
         (some? (:height x)) (assoc :height (:height x))
         (some? (:side x)) (assoc :side (if (keyword? (:side x)) (name (:side x)) (str (:side x))))
         (some? (:variant x)) (assoc :variant (if (keyword? (:variant x))
@@ -501,7 +514,7 @@
   "Clojure `:open?` becomes wire `:open` (boolean)."
   [opts]
   (if (contains? opts :open?)
-    (-> opts (dissoc :open?) (assoc :open (boolean (:open? opts))))
+    (-> opts (dissoc :open?) (assoc :open (boolean-state (:open? opts))))
     opts))
 
 (defn- rewrite-selected
@@ -610,7 +623,7 @@
       (contains? m :foreground) (assoc :foreground (some-> (:foreground m) str))
       (contains? m :hover) (assoc :hover (some-> (:hover m) str))
       (contains? m :active) (assoc :active (some-> (:active m) str))
-      (contains? m :shadow) (assoc :shadow (boolean (:shadow m))))))
+      (contains? m :shadow) (assoc :shadow (:shadow m)))))
 
 (defn- button-style
   "Named `:size` becomes `:control-size`. `:caret` is Kit `dropdown_caret`.
@@ -753,18 +766,18 @@
   (ui/checkbox (:done item) #(swap! state update-in [:items i :done] not) \"Done\")
   (ui/checkbox done toggle {:shape :circle})"
   ([checked on-click]
-   {:type :checkbox :checked (boolean checked) :on-click on-click})
+   {:type :checkbox :checked (boolean-state checked) :on-click on-click})
   ([checked on-click label-or-style]
    (if (map? label-or-style)
-     (merge {:type :checkbox :checked (boolean checked) :on-click on-click}
+     (merge {:type :checkbox :checked (boolean-state checked) :on-click on-click}
             label-or-style)
      {:type :checkbox
-      :checked (boolean checked)
+      :checked (boolean-state checked)
       :text (some-> label-or-style str)
       :on-click on-click}))
   ([checked on-click label style]
    (merge {:type :checkbox
-           :checked (boolean checked)
+           :checked (boolean-state checked)
            :text (some-> label str)
            :on-click on-click}
           style)))
@@ -870,24 +883,24 @@
   (ui/switch on? {:on-change #(swap! !state assoc :on %)})
   (ui/switch on? on-change \"Notifications\")"
   ([checked]
-   {:type :switch :checked (boolean checked)})
+   {:type :switch :checked (boolean-state checked)})
   ([checked on-change-or-opts]
    (if (map? on-change-or-opts)
-     (merge-widget {:type :switch :checked (boolean checked)} on-change-or-opts)
-     {:type :switch :checked (boolean checked) :on-change on-change-or-opts}))
+     (merge-widget {:type :switch :checked (boolean-state checked)} on-change-or-opts)
+     {:type :switch :checked (boolean-state checked) :on-change on-change-or-opts}))
   ([checked on-change label-or-opts]
    (if (map? label-or-opts)
      (merge-widget {:type :switch
-                    :checked (boolean checked)
+                    :checked (boolean-state checked)
                     :on-change on-change}
                    label-or-opts)
      {:type :switch
-      :checked (boolean checked)
+      :checked (boolean-state checked)
       :text (some-> label-or-opts str)
       :on-change on-change}))
   ([checked on-change label opts]
    (merge-widget {:type :switch
-                  :checked (boolean checked)
+                  :checked (boolean-state checked)
                   :text (some-> label str)
                   :on-change on-change}
                  opts)))
@@ -901,14 +914,14 @@
 
   (ui/toggle bold? {:on-change #(swap! !state assoc :bold %) :text \"Bold\"})"
   ([checked]
-   {:type :toggle :checked (boolean checked)})
+   {:type :toggle :checked (boolean-state checked)})
   ([checked on-change-or-opts]
    (if (map? on-change-or-opts)
-     (merge-widget {:type :toggle :checked (boolean checked)} on-change-or-opts)
-     {:type :toggle :checked (boolean checked) :on-change on-change-or-opts}))
+     (merge-widget {:type :toggle :checked (boolean-state checked)} on-change-or-opts)
+     {:type :toggle :checked (boolean-state checked) :on-change on-change-or-opts}))
   ([checked on-change opts]
    (merge-widget {:type :toggle
-                  :checked (boolean checked)
+                  :checked (boolean-state checked)
                   :on-change on-change}
                  opts)))
 
@@ -1336,7 +1349,7 @@
    (let [opts (if (map? opts) opts {:on-change opts})
          raw (or (:options opts) (:items opts))
          searchable (if (contains? opts :searchable)
-                      (boolean (:searchable opts))
+                      (boolean-state (:searchable opts))
                       true)
          has-query? (contains? opts :query)
          query (:query opts)
@@ -1520,7 +1533,7 @@
     (and (map? x) (or (true? (:separator x))
                       (= (:id x) :-)
                       (= (:id x) "-")))
-    {:separator true}
+    (assoc (select-keys (option-item x) [:disabled :checked :expanded]) :separator true)
     (map? x)
     (let [n (option-item x)]
       (cond-> n
@@ -1558,7 +1571,7 @@
     (cond-> n
       (and (map? x) (some? (:width x))) (assoc :width (:width x))
       (and (map? x) (some? (:span x))) (assoc :span (:span x))
-      (and (map? x) (some? (:selectable x))) (assoc :selectable (boolean (:selectable x)))
+      (and (map? x) (contains? x :selectable)) (assoc :selectable (:selectable x))
       (and (map? x) (some? (:align x)))
       (assoc :align (if (keyword? (:align x)) (name (:align x)) (str (:align x))))
       (or (some? (:sort x)) (true? (:sortable x)))
@@ -1571,8 +1584,8 @@
                       (keyword? (:fixed x)) (name (:fixed x))
                       :else (str (:fixed x))))
       (true? (:fixed-left x)) (assoc :fixed "left")
-      (some? (:resizable x)) (assoc :resizable (boolean (:resizable x)))
-      (some? (:movable x)) (assoc :movable (boolean (:movable x)))
+      (and (map? x) (contains? x :resizable)) (assoc :resizable (:resizable x))
+      (and (map? x) (contains? x :movable)) (assoc :movable (:movable x))
       (some? (:min-width x)) (assoc :min-width (:min-width x))
       (some? (:max-width x)) (assoc :max-width (:max-width x)))))
 
@@ -1619,6 +1632,18 @@
         (empty? cells) (assoc :cells [(str (or label id))])))
     :else {:id (str x) :label (str x) :cells [(str x)]}))
 
+(defn- controlled-overlay-args
+  [open?-or-opts args]
+  (if (map? open?-or-opts)
+    (let [[opts children] (leading-opts (cons open?-or-opts args))
+          open? (cond
+                  (contains? opts :open?) (boolean-state (:open? opts))
+                  (contains? opts :open) (:open opts)
+                  :else false)]
+      [open? opts children])
+    (let [[opts children] (leading-opts args)]
+      [(boolean-state open?-or-opts) opts children])))
+
 (defn dialog
   "Modal dialog on the overlay layer. Controlled by `open?` (or `:open?`).
 
@@ -1648,17 +1673,13 @@
     (ui/label \"This cannot be undone.\"))"
   [open?-or-opts & args]
   (let [[open? opts children]
-        (if (or (boolean? open?-or-opts) (nil? open?-or-opts))
-          (let [[opts children] (leading-opts args)]
-            [open?-or-opts opts children])
-          (let [[opts children] (leading-opts (cons open?-or-opts args))]
-            [(or (:open? opts) (:open opts) false) opts children]))
+        (controlled-overlay-args open?-or-opts args)
         opts (-> opts rewrite-open (dissoc :open?) apply-control-size)]
     (merge {:type :dialog
-            :open (boolean open?)
+            :open open?
             :children (flatten-children children)}
            opts
-           {:open (boolean open?)})))
+           {:open open?})))
 
 (defn alert-dialog
   "Alert dialog overlay. Kit `AlertDialog`: not backdrop-dismissible.
@@ -1675,17 +1696,13 @@
     (ui/label \"This cannot be undone.\"))"
   [open?-or-opts & args]
   (let [[open? opts children]
-        (if (or (boolean? open?-or-opts) (nil? open?-or-opts))
-          (let [[opts children] (leading-opts args)]
-            [open?-or-opts opts children])
-          (let [[opts children] (leading-opts (cons open?-or-opts args))]
-            [(or (:open? opts) (:open opts) false) opts children]))
+        (controlled-overlay-args open?-or-opts args)
         opts (-> opts rewrite-open (dissoc :open?) apply-control-size)]
     (merge {:type :alert-dialog
-            :open (boolean open?)
+            :open open?
             :children (flatten-children children)}
            opts
-           {:open (boolean open?)})))
+           {:open open?})))
 
 (defn popover
   "Anchored popover. Controlled by `open?`. `:trigger` is a button (or
@@ -1706,10 +1723,10 @@
                  rewrite-open
                  apply-control-size)]
     (cond-> (merge {:type :popover
-                    :open (boolean open?)
+                    :open (boolean-state open?)
                     :children (flatten-children children)}
                    opts
-                   {:open (boolean open?)})
+                   {:open (boolean-state open?)})
       (ui-node? trigger) (assoc :trigger trigger)
       (and (some? trigger) (not (ui-node? trigger)))
       (assoc :trigger (button (str trigger))))))
@@ -1964,7 +1981,7 @@
    (let [raw (or items [])
          opts (if (map? opts) opts {:on-change opts})
          searchable (if (contains? opts :searchable)
-                      (boolean (:searchable opts))
+                      (boolean-state (:searchable opts))
                       true)
          opts (-> (or opts {})
                   (dissoc :items)
@@ -2414,21 +2431,17 @@
     (ui/label \"Details\"))"
   [open?-or-opts & args]
   (let [[open? opts children]
-        (if (or (boolean? open?-or-opts) (nil? open?-or-opts))
-          (let [[opts children] (leading-opts args)]
-            [open?-or-opts opts children])
-          (let [[opts children] (leading-opts (cons open?-or-opts args))]
-            [(or (:open? opts) (:open opts) false) opts children]))
+        (controlled-overlay-args open?-or-opts args)
         footer (:footer opts)
         opts (-> opts
                  (dissoc :footer)
                  rewrite-open
                  apply-control-size)]
     (cond-> (merge {:type :sheet
-                    :open (boolean open?)
+                    :open open?
                     :children (flatten-children children)}
                    opts
-                   {:open (boolean open?)})
+                   {:open open?})
       (ui-node? footer) (assoc :footer footer)
       (and (some? footer) (not (ui-node? footer)))
       (assoc :footer (first (flatten-children [footer]))))))
