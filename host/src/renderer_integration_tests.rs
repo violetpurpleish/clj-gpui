@@ -13,7 +13,7 @@ use gpui_kit::component::input::Position;
 use gpui_kit::component::slider::SliderValue;
 use gpui_kit::test::{TestAppContextExt, TestWindowExt};
 use gpui_kit::{
-    AppContext as _, Entity, EntityInputHandler as _, Modifiers, MouseButton, ScrollDelta,
+    AppContext as _, Axis, Entity, EntityInputHandler as _, Modifiers, MouseButton, ScrollDelta,
     TestAppContext, VisualTestContext, WindowHandle, point, px, size,
 };
 use serde_json::json;
@@ -425,11 +425,11 @@ async fn production_slider_keeps_identity_and_controlled_value_across_tree_chang
         Root::new(view, window, cx)
     });
     assert!(matches!(cmd_rx.recv().unwrap(), Cmd::Render));
-    let slider_tree = |value: f32, extra: bool| {
+    let slider_tree = |value: f32, extra: bool, on_change: &str, on_release: &str| {
         let mut children = vec![json!({
             "type": "slider", "id": "volume", "value": value,
             "min": 0, "max": 100, "step": 1, "height": 28,
-            "on-change": "volume-change", "on-release": "volume-release"
+            "on-change": on_change, "on-release": on_release
         })];
         if extra {
             children.insert(0, json!({"type": "label", "text": "Unrelated rerender"}));
@@ -442,7 +442,11 @@ async fn production_slider_keeps_identity_and_controlled_value_across_tree_chang
     };
 
     event_tx
-        .send(HostEvent::tree(slider_tree(20., false), None, vec![]))
+        .send(HostEvent::tree(
+            slider_tree(20., false, "volume-change", "volume-release"),
+            None,
+            vec![],
+        ))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -454,7 +458,11 @@ async fn production_slider_keeps_identity_and_controlled_value_across_tree_chang
     );
 
     event_tx
-        .send(HostEvent::tree(slider_tree(65., true), None, vec![]))
+        .send(HostEvent::tree(
+            slider_tree(65., true, "volume-change", "volume-release"),
+            None,
+            vec![],
+        ))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -470,32 +478,83 @@ async fn production_slider_keeps_identity_and_controlled_value_across_tree_chang
         "an unrelated sibling must not recreate controlled slider state"
     );
 
+    event_tx.send(HostEvent::RenderRequested).await.unwrap();
+    settle_root(handle, cx);
+    assert!(matches!(cmd_rx.recv().unwrap(), Cmd::Render));
+
     cx.update_window(handle.into(), |_, window, cx| {
-        let mut slider = window.within("volume-track");
-        let track = slider.find("slider-bar-container");
-        slider.click_at(
-            "slider-bar-container",
-            point(
-                track.bounds().size.width * 0.8,
-                track.bounds().size.height / 2.,
-            ),
-            cx,
-        );
+        first_state.update(cx, |state, cx| {
+            let bounds = state.bounds();
+            state.update_value_by_position(
+                Axis::Horizontal,
+                point(
+                    bounds.left() + bounds.size.width * 0.8,
+                    bounds.top() + bounds.size.height / 2.,
+                ),
+                false,
+                window,
+                cx,
+            );
+            state.handle_release(cx);
+        });
     })
     .unwrap();
     cx.run_until_parked();
     cx.executor().timer(Duration::from_millis(20)).await;
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.test_slider_value("volume", cx)),
+        Some(SliderValue::Single(80.)),
+        "the native click value is visible before its callback can run"
+    );
+    assert!(
+        drain(&cmd_rx).is_empty(),
+        "the gesture must wait rather than send ids from the registry being replaced"
+    );
+
+    event_tx
+        .send(HostEvent::tree(
+            slider_tree(65., true, "volume-change-fresh", "volume-release-fresh"),
+            None,
+            vec![],
+        ))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.test_slider_value("volume", cx)),
+        Some(SliderValue::Single(80.)),
+        "an unrelated old controlled value must not undo the click"
+    );
     let emitted = drain(&cmd_rx);
+    let slider_seq = emitted.iter().find_map(|cmd| match cmd {
+        Cmd::Callback { seq, .. } | Cmd::CallbackBatch { seq, .. } => *seq,
+        _ => None,
+    });
+    assert!(slider_seq.is_some());
     let emitted_pairs = callback_pairs(&emitted);
     assert!(
         emitted_pairs
             .iter()
-            .any(|(id, value)| id == "volume-change" && value.is_some())
+            .any(|(id, value)| id == "volume-change-fresh" && value.is_some())
     );
     assert!(
         emitted_pairs
             .iter()
-            .any(|(id, value)| id == "volume-release" && value.is_some())
+            .any(|(id, value)| id == "volume-release-fresh" && value.is_some())
+    );
+
+    event_tx
+        .send(HostEvent::tree(
+            slider_tree(80., true, "volume-change-ack", "volume-release-ack"),
+            slider_seq,
+            vec![],
+        ))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.test_slider_value("volume", cx)),
+        Some(SliderValue::Single(80.))
     );
 
     let without_slider: Node = serde_json::from_value(json!({
@@ -522,7 +581,11 @@ async fn production_slider_keeps_identity_and_controlled_value_across_tree_chang
     );
 
     event_tx
-        .send(HostEvent::tree(slider_tree(35., false), None, vec![]))
+        .send(HostEvent::tree(
+            slider_tree(35., false, "volume-change", "volume-release"),
+            None,
+            vec![],
+        ))
         .await
         .unwrap();
     settle_root(handle, cx);

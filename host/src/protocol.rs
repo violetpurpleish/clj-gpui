@@ -502,19 +502,14 @@ impl InputChangeCoalesce {
     }
 }
 
-/// Coalesce Kit `SliderEvent::Change` and `Release` so a click cannot
-/// `export-tree` between them and leave `:on-release` as an unknown `cb-N`.
-///
-/// Same-tick Change then Release is one `:on-change` + `:on-release`
-/// batch. Change-only (live drag) flushes after a defer. Release that
-/// arrives while a Change round-trip is in flight waits for the next
-/// tree's callback ids, same idea as `InputChangeCoalesce`.
+/// Coalesce Kit `SliderEvent::Change` and `Release` within one GPUI effect.
+/// Cross-round-trip serialization belongs to `CallbackQueue`, which keeps
+/// semantic slider gestures until it can resolve the installed tree's ids.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct SliderEventCoalesce {
     pending_change: Option<Value>,
     pending_release: Option<Value>,
     flush_scheduled: bool,
-    in_flight: bool,
 }
 
 impl SliderEventCoalesce {
@@ -531,52 +526,17 @@ impl SliderEventCoalesce {
     }
 
     fn schedule_if_idle(&mut self) -> bool {
-        if self.flush_scheduled || self.in_flight {
+        if self.flush_scheduled {
             return false;
         }
         self.flush_scheduled = true;
         true
     }
 
-    /// Drain pending payloads. Does not mark in-flight: a payload with no
-    /// matching callback must not block later gestures.
+    /// Drain the latest payloads into a semantic queued gesture.
     pub fn take_pending(&mut self) -> (Option<Value>, Option<Value>) {
         self.flush_scheduled = false;
         (self.pending_change.take(), self.pending_release.take())
-    }
-
-    /// `in_flight` means an RPC was sent, not merely that an event existed.
-    fn mark_in_flight(&mut self) {
-        self.in_flight = true;
-    }
-
-    /// Drain pending events into callback RPCs. Marks in-flight only when
-    /// at least one handler is installed for a pending payload.
-    pub fn take_outbound(
-        &mut self,
-        on_change: Option<String>,
-        on_release: Option<String>,
-    ) -> Vec<CallbackCall> {
-        let (change, release) = self.take_pending();
-        let calls = slider_event_calls(on_change, on_release, change, release);
-        if !calls.is_empty() {
-            self.mark_in_flight();
-        }
-        calls
-    }
-
-    /// New export assigned fresh callback ids. Returns whether to flush
-    /// events that arrived during the round-trip.
-    pub fn on_ids_refreshed(&mut self) -> bool {
-        self.in_flight = false;
-        if (self.pending_change.is_some() || self.pending_release.is_some())
-            && !self.flush_scheduled
-        {
-            self.flush_scheduled = true;
-            true
-        } else {
-            false
-        }
     }
 }
 
@@ -1971,6 +1931,10 @@ pub enum HostEvent {
     /// `callback_seq` is `Some` when this tree was fetched right after that submit.
     /// `themes` is Clojure-registered ThemeSets from the render response.
     Tree(Box<Node>, Option<u64>, Vec<ThemeSet>),
+    /// Clojure state changed outside a callback. The renderer marks its
+    /// semantic callback queue as waiting before asking the worker to export
+    /// the replacement registry.
+    RenderRequested,
     Error(String),
     PickDirectory {
         request_id: String,
@@ -2504,97 +2468,21 @@ mod tests {
             !c.on_release(json!(42.0)),
             "same-tick Release must ride the Change defer"
         );
-        let calls = c.take_outbound(Some("cb-change".into()), Some("cb-release".into()));
-        assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].id, "cb-change");
-        assert_eq!(calls[0].value, Some(json!(42.0)));
-        assert_eq!(calls[1].id, "cb-release");
-        assert_eq!(calls[1].value, Some(json!(42.0)));
+        assert_eq!(c.take_pending(), (Some(json!(42.0)), Some(json!(42.0))));
 
         let mut drag = SliderEventCoalesce::default();
         assert!(drag.on_change(json!(10.0)));
         assert!(!drag.on_change(json!(11.0)));
-        let calls = drag.take_outbound(Some("cb-change".into()), Some("cb-release".into()));
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].value, Some(json!(11.0)));
+        assert_eq!(drag.take_pending(), (Some(json!(11.0)), None));
 
         let mut late = SliderEventCoalesce::default();
         assert!(late.on_change(json!(1.0)));
-        let sent = late.take_outbound(Some("cb-change".into()), Some("cb-release".into()));
-        assert_eq!(sent.len(), 1);
+        assert_eq!(late.take_pending(), (Some(json!(1.0)), None));
         assert!(
-            !late.on_release(json!(1.0)),
-            "Release during in-flight Change waits for new ids"
+            late.on_release(json!(1.0)),
+            "a later effect schedules a semantic Release gesture"
         );
-        assert!(late.on_ids_refreshed());
-        let calls = late.take_outbound(Some("cb-change".into()), Some("cb-release".into()));
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].id, "cb-release");
-        assert_eq!(calls[0].value, Some(json!(1.0)));
-    }
-
-    #[test]
-    fn slider_event_coalesce_in_flight_requires_an_outbound_rpc() {
-        let mut change_only = SliderEventCoalesce::default();
-        assert!(change_only.on_change(json!(10.0)));
-        assert!(!change_only.on_release(json!(10.0)));
-        let first = change_only.take_outbound(Some("cb-change".into()), None);
-        assert_eq!(first.len(), 1);
-        assert_eq!(first[0].id, "cb-change");
-        assert!(!change_only.on_ids_refreshed());
-        assert!(change_only.on_release(json!(10.0)));
-        let poisoned = change_only.take_outbound(Some("cb-change".into()), None);
-        assert!(
-            poisoned.is_empty(),
-            "Release with no handler must not send and must not mark in-flight"
-        );
-        assert!(
-            change_only.on_change(json!(11.0)),
-            "a second gesture must still emit Change"
-        );
-        let second = change_only.take_outbound(Some("cb-change".into()), None);
-        assert_eq!(second.len(), 1);
-        assert_eq!(second[0].value, Some(json!(11.0)));
-
-        let mut release_only = SliderEventCoalesce::default();
-        assert!(release_only.on_change(json!(5.0)));
-        let skipped = release_only.take_outbound(None, Some("cb-release".into()));
-        assert!(
-            skipped.is_empty(),
-            "Change with no handler must not mark in-flight"
-        );
-        assert!(
-            release_only.on_release(json!(5.0)),
-            "preceding Change must not block Release"
-        );
-        let released = release_only.take_outbound(None, Some("cb-release".into()));
-        assert_eq!(released.len(), 1);
-        assert_eq!(released[0].id, "cb-release");
-        assert_eq!(released[0].value, Some(json!(5.0)));
-
-        let mut both = SliderEventCoalesce::default();
-        assert!(both.on_change(json!([20.0, 70.0])));
-        assert!(!both.on_release(json!([20.0, 70.0])));
-        let batch = both.take_outbound(Some("cb-change".into()), Some("cb-release".into()));
-        assert_eq!(
-            batch
-                .iter()
-                .map(|call| call.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["cb-change", "cb-release"]
-        );
-
-        let mut neither = SliderEventCoalesce::default();
-        assert!(neither.on_change(json!(1.0)));
-        assert!(!neither.on_release(json!(1.0)));
-        assert!(neither.take_outbound(None, None).is_empty());
-        assert!(
-            neither.on_change(json!(2.0)),
-            "events with no handlers leave the coalescer idle"
-        );
-        assert!(neither.take_outbound(None, None).is_empty());
-        assert!(neither.on_release(json!(2.0)));
-        assert!(neither.take_outbound(None, None).is_empty());
+        assert_eq!(late.take_pending(), (None, Some(json!(1.0))));
     }
 
     #[test]

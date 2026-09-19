@@ -38,7 +38,7 @@ use gpui_component::{
 };
 use gpui_kit as gpui;
 use gpui_kit::component as gpui_component;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
@@ -337,6 +337,11 @@ pub enum QueuedAction {
     ButtonClick {
         key: String,
     },
+    SliderGesture {
+        key: String,
+        change: Option<Value>,
+        release: Option<Value>,
+    },
     DialogClose {
         key: String,
         ok: Option<bool>,
@@ -387,6 +392,32 @@ pub enum CommandEcho {
     Query { key: String, query: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SliderEcho {
+    pub key: String,
+    pub value: Value,
+}
+
+impl SliderEcho {
+    fn from_action(action: &QueuedAction) -> Option<Self> {
+        match action {
+            QueuedAction::SliderGesture {
+                key,
+                change,
+                release,
+            } => release
+                .as_ref()
+                .or(change.as_ref())
+                .cloned()
+                .map(|value| Self {
+                    key: key.clone(),
+                    value,
+                }),
+            _ => None,
+        }
+    }
+}
+
 impl CommandEcho {
     fn from_action(action: &QueuedAction) -> Option<Self> {
         match action {
@@ -407,16 +438,39 @@ impl CommandEcho {
 pub struct OutboundCallbacks {
     pub calls: Vec<protocol::CallbackCall>,
     pub command_echo: Option<CommandEcho>,
+    pub slider_echo: Option<SliderEcho>,
 }
 
 #[derive(Default)]
 pub struct CallbackQueue {
     pending: VecDeque<QueuedAction>,
     wait_for_seq: Option<u64>,
+    registry_refreshes_pending: usize,
 }
 
 impl CallbackQueue {
     pub fn push(&mut self, action: QueuedAction) {
+        if let QueuedAction::SliderGesture {
+            key,
+            change,
+            release,
+        } = &action
+            && let Some(QueuedAction::SliderGesture {
+                key: pending_key,
+                change: pending_change,
+                release: pending_release,
+            }) = self.pending.back_mut()
+            && pending_key == key
+            && pending_release.is_none()
+        {
+            if change.is_some() {
+                *pending_change = change.clone();
+            }
+            if release.is_some() {
+                *pending_release = release.clone();
+            }
+            return;
+        }
         self.pending.push_back(action);
     }
 
@@ -431,7 +485,7 @@ impl CallbackQueue {
     /// whether the flush ran from the original `on_select` / `on_query`
     /// or later from `HostEvent::Tree`.
     pub fn next_outbound(&mut self, tree: &Node) -> Option<OutboundCallbacks> {
-        if self.wait_for_seq.is_some() {
+        if self.wait_for_seq.is_some() || self.registry_refreshes_pending > 0 {
             return None;
         }
         while let Some(action) = self.pending.pop_front() {
@@ -452,6 +506,7 @@ impl CallbackQueue {
                 return Some(OutboundCallbacks {
                     calls,
                     command_echo: CommandEcho::from_action(&action),
+                    slider_echo: SliderEcho::from_action(&action),
                 });
             }
         }
@@ -468,7 +523,14 @@ impl CallbackQueue {
         self.wait_for_seq = Some(seq);
     }
 
+    pub fn render_requested(&mut self) {
+        self.registry_refreshes_pending = self.registry_refreshes_pending.saturating_add(1);
+    }
+
     pub fn tree_installed(&mut self, seq: Option<u64>) {
+        if seq.is_none() {
+            self.registry_refreshes_pending = self.registry_refreshes_pending.saturating_sub(1);
+        }
         // An unrelated render must not release an action whose own batch
         // (and registry replacement) is still queued behind that render.
         if seq.is_some() && seq == self.wait_for_seq {
@@ -479,6 +541,7 @@ impl CallbackQueue {
     pub fn clear(&mut self) {
         self.pending.clear();
         self.wait_for_seq = None;
+        self.registry_refreshes_pending = 0;
     }
 }
 
@@ -486,6 +549,7 @@ impl QueuedAction {
     fn resolve(&self, tree: &Node) -> Vec<protocol::CallbackCall> {
         let key = match self {
             Self::ButtonClick { key }
+            | Self::SliderGesture { key, .. }
             | Self::DialogClose { key, .. }
             | Self::PopoverOpen { key, .. }
             | Self::MenuSelect { key, .. }
@@ -499,6 +563,7 @@ impl QueuedAction {
         walk_nodes(tree, "root", &mut |node, path| {
             let kind_matches = match self {
                 Self::ButtonClick { .. } => node.kind == "button",
+                Self::SliderGesture { .. } => node.kind == "slider",
                 Self::DialogClose { .. } => is_dialog_kind(&node.kind),
                 Self::PopoverOpen { .. } => matches!(node.kind.as_str(), "popover" | "native-menu"),
                 Self::MenuSelect { .. } => matches!(
@@ -526,6 +591,14 @@ impl QueuedAction {
                 .on_click
                 .map(|id| vec![protocol::CallbackCall::fire(id)])
                 .unwrap_or_default(),
+            Self::SliderGesture {
+                change, release, ..
+            } if node.kind == "slider" && !node.disabled => protocol::slider_event_calls(
+                node.on_change,
+                node.on_release,
+                change.clone(),
+                release.clone(),
+            ),
             Self::DialogClose { ok, .. } if node.open.unwrap_or(false) => {
                 let first = match ok {
                     Some(true) => node.on_ok,
@@ -2069,6 +2142,87 @@ mod tests {
             Some(&"find".to_string()),
             Some(8)
         ));
+    }
+
+    #[test]
+    fn slider_gestures_wait_for_fresh_registry_and_coalesce_while_in_flight() {
+        let slider_tree = |change: &str, release: &str| {
+            node(json!({"type": "window", "children": [{
+                "type": "slider", "id": "position", "value": 4,
+                "on-change": change, "on-release": release
+            }]}))
+        };
+        let stale = slider_tree("cb-change-old", "cb-release-old");
+        let fresh = slider_tree("cb-change-fresh", "cb-release-fresh");
+        let mut queue = CallbackQueue::default();
+
+        queue.render_requested();
+        queue.render_requested();
+        queue.push(QueuedAction::SliderGesture {
+            key: "position".into(),
+            change: Some(json!(811.0)),
+            release: Some(json!(811.0)),
+        });
+        assert!(
+            queue.next_outbound(&stale).is_none(),
+            "a visible stale tree must not dispatch while its replacement registry is in flight"
+        );
+
+        queue.tree_installed(None);
+        assert!(
+            queue.next_outbound(&fresh).is_none(),
+            "every queued registry refresh needs its matching installed tree"
+        );
+        queue.tree_installed(None);
+        let first = queue.next_outbound(&fresh).unwrap();
+        assert_eq!(
+            first
+                .calls
+                .iter()
+                .map(|call| call.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cb-change-fresh", "cb-release-fresh"]
+        );
+        assert_eq!(
+            first.slider_echo,
+            Some(SliderEcho {
+                key: "position".into(),
+                value: json!(811.0),
+            })
+        );
+        queue.sent(7);
+
+        queue.push(QueuedAction::SliderGesture {
+            key: "position".into(),
+            change: Some(json!(820.0)),
+            release: None,
+        });
+        queue.push(QueuedAction::SliderGesture {
+            key: "position".into(),
+            change: Some(json!(830.0)),
+            release: None,
+        });
+        queue.push(QueuedAction::SliderGesture {
+            key: "position".into(),
+            change: None,
+            release: Some(json!(830.0)),
+        });
+        assert!(queue.next_outbound(&fresh).is_none());
+
+        let newest = slider_tree("cb-change-newest", "cb-release-newest");
+        queue.tree_installed(Some(7));
+        let second = queue.next_outbound(&newest).unwrap();
+        assert_eq!(second.calls[0].id, "cb-change-newest");
+        assert_eq!(second.calls[0].value, Some(json!(830.0)));
+        assert_eq!(second.calls[1].id, "cb-release-newest");
+        assert_eq!(second.calls[1].value, Some(json!(830.0)));
+        assert_eq!(
+            second.slider_echo,
+            Some(SliderEcho {
+                key: "position".into(),
+                value: json!(830.0),
+            })
+        );
     }
 
     #[test]

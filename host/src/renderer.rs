@@ -137,9 +137,12 @@ struct SliderSlot {
     max: f32,
     step: f32,
     scale: SliderScale,
-    on_change: Option<String>,
-    on_release: Option<String>,
     coalesce: protocol::SliderEventCoalesce,
+    has_callback: bool,
+    /// Native click/drag value protected from unrelated controlled renders.
+    interaction_value: Option<Value>,
+    /// Callback generation that will acknowledge `interaction_value`.
+    submitted: Option<(u64, Value)>,
     /// Last wrapper size. Crate fill/thumb use cached bar bounds; if the
     /// track width changes we must re-render or they disagree by a few px.
     bar_px: Option<(f32, f32)>,
@@ -722,6 +725,10 @@ impl RootView {
                                 view.nrepl_port
                             );
                         }
+                        HostEvent::RenderRequested => {
+                            view.callback_queue.render_requested();
+                            let _ = view.cmd_tx.send(Cmd::Render);
+                        }
                         HostEvent::Error(err) => {
                             view.callback_queue.clear();
                             for slot in view.inputs.values_mut() {
@@ -1058,7 +1065,16 @@ impl RootView {
         // queue. A later HostEvent::Tree flush must bind them too, or a
         // queued CommandQuery/CommandSelect would render without a latch.
         self.install_command_echo_latch(seq, outbound.command_echo);
+        self.install_slider_echo_latch(seq, outbound.slider_echo);
         Some(seq)
+    }
+
+    fn install_slider_echo_latch(&mut self, seq: u64, echo: Option<overlay::SliderEcho>) {
+        if let Some(echo) = echo
+            && let Some(slot) = self.sliders.get_mut(&echo.key)
+        {
+            slot.submitted = Some((seq, echo.value));
+        }
     }
 
     fn install_command_echo_latch(&mut self, seq: u64, echo: Option<overlay::CommandEcho>) {
@@ -1101,13 +1117,17 @@ impl RootView {
         let Some(slot) = self.sliders.get_mut(key) else {
             return;
         };
-        let calls = slot
-            .coalesce
-            .take_outbound(slot.on_change.clone(), slot.on_release.clone());
-        if calls.is_empty() {
+        let (change, release) = slot.coalesce.take_pending();
+        if change.is_none() && release.is_none() {
             return;
         }
-        protocol::send_callbacks(&self.cmd_tx, calls);
+        self.callback_queue
+            .push(overlay::QueuedAction::SliderGesture {
+                key: key.to_string(),
+                change,
+                release,
+            });
+        self.flush_callback_queue();
     }
 
     fn flush_text_slot<S>(
@@ -1383,6 +1403,7 @@ impl RootView {
         let step = slider_step(node.step);
         let scale = slider_effective_scale(node, lo, hi);
         let value = slider_wanted_value(node, lo, hi);
+        let tree_seq = self.tree_seq;
 
         if let Some(slot) = self.sliders.get_mut(key)
             && (slot.min - lo).abs() <= f32::EPSILON
@@ -1390,22 +1411,28 @@ impl RootView {
             && (slot.step - step).abs() <= f32::EPSILON
             && slot.scale == scale
         {
-            let id_changed = slot.on_change != node.on_change || slot.on_release != node.on_release;
-            slot.on_change = node.on_change.clone();
-            slot.on_release = node.on_release.clone();
-            let refresh = id_changed && slot.coalesce.on_ids_refreshed();
+            slot.has_callback = node.on_change.is_some() || node.on_release.is_some();
+            if !slot.has_callback {
+                slot.interaction_value = None;
+                slot.submitted = None;
+            }
+            if let Some((seq, submitted)) = slot.submitted.as_ref()
+                && tree_seq == Some(*seq)
+            {
+                if slot.interaction_value.as_ref() == Some(submitted) {
+                    slot.interaction_value = None;
+                }
+                slot.submitted = None;
+            }
             let current = slot.state.read(cx).value();
             // `set_value` notifies without emitting Change or Release, so
             // applying Clojure's current value cannot loop. Step is drag
             // granularity only; a 40→42 update with step 5 must still land
             // on 42.
-            if slider_value_changed(current, value) {
+            if slot.interaction_value.is_none() && slider_value_changed(current, value) {
                 slot.state.update(cx, |s, cx| {
                     s.set_value(value, window, cx);
                 });
-            }
-            if refresh {
-                Self::schedule_slider_event_flush(key.to_string(), window, cx);
             }
             return slot.state.clone();
         }
@@ -1430,9 +1457,10 @@ impl RootView {
                 max: hi,
                 step,
                 scale,
-                on_change: node.on_change.clone(),
-                on_release: node.on_release.clone(),
                 coalesce: protocol::SliderEventCoalesce::default(),
+                has_callback: node.on_change.is_some() || node.on_release.is_some(),
+                interaction_value: None,
+                submitted: None,
                 bar_px: None,
                 settle: 0,
             },
@@ -1445,13 +1473,17 @@ impl RootView {
                     let Some(slot) = this.sliders.get_mut(&key_owned) else {
                         return;
                     };
+                    let payload = match event {
+                        SliderEvent::Change(changed) | SliderEvent::Release(changed) => {
+                            slider_event_payload(*changed)
+                        }
+                    };
+                    if slot.has_callback {
+                        slot.interaction_value = Some(payload.clone());
+                    }
                     match event {
-                        SliderEvent::Change(changed) => {
-                            slot.coalesce.on_change(slider_event_payload(*changed))
-                        }
-                        SliderEvent::Release(changed) => {
-                            slot.coalesce.on_release(slider_event_payload(*changed))
-                        }
+                        SliderEvent::Change(_) => slot.coalesce.on_change(payload),
+                        SliderEvent::Release(_) => slot.coalesce.on_release(payload),
                     }
                 };
                 if schedule {

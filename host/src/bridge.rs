@@ -183,8 +183,6 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
     let (event_tx, event_rx) = async_channel::unbounded::<HostEvent>();
     let (ready_tx, ready_rx) = mpsc::channel::<(u16, String)>();
-    let worker_cmds = cmd_tx.clone();
-
     thread::Builder::new()
         .name("clj-gpui-reader".into())
         .spawn({
@@ -231,7 +229,7 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                             });
                         }
                         "request-render" => {
-                            let _ = worker_cmds.send(Cmd::Render);
+                            let _ = event_tx.send_blocking(HostEvent::RenderRequested);
                         }
                         "pick-directory" => {
                             let request_id = value
@@ -408,7 +406,8 @@ pub fn protocol_test() -> Result<()> {
             }
             Ok(HostEvent::Ready { .. }) => continue,
             Ok(
-                HostEvent::PickDirectory { .. }
+                HostEvent::RenderRequested
+                | HostEvent::PickDirectory { .. }
                 | HostEvent::RevealPath { .. }
                 | HostEvent::OpenPath { .. }
                 | HostEvent::CapturePreview { .. },
