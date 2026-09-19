@@ -873,6 +873,7 @@ pub(crate) fn paint_scroller_tree(
 #[derive(Clone)]
 pub(crate) struct ScrollerFollow {
     pub target: String,
+    pub paused: Rc<Cell<bool>>,
     pub viewport_height: Rc<Cell<f32>>,
     pub state: gpui::Entity<gpui_component::message_scroller::MessageScrollerState>,
 }
@@ -914,6 +915,9 @@ fn paint_following_static_tree(
         .child(
             gpui::canvas(
                 move |bounds, window, _cx| {
+                    if follow.paused.get() {
+                        return;
+                    }
                     // List installs its viewport mask before prepainting each row.
                     // Requesting a viewport-sized rectangle beginning at the word
                     // aligns the word's line, not just its enclosing paragraph.

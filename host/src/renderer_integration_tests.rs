@@ -89,6 +89,11 @@ fn production_view(handle: WindowHandle<Root>, cx: &mut TestAppContext) -> Entit
 fn settle_root(handle: WindowHandle<Root>, cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(500));
+    paint_root(handle, cx);
+}
+
+fn paint_root(handle: WindowHandle<Root>, cx: &mut TestAppContext) {
+    cx.run_until_parked();
     for _ in 0..3 {
         cx.update_window(handle.into(), |_, window, cx| {
             window.simulate_next_frame(cx);
@@ -152,6 +157,30 @@ async fn transcript_words_wrap_and_click_inside_virtual_scroller(cx: &mut TestAp
     }
 }
 
+fn transcript_follow_tree(passage: usize, word: usize, width: usize, generation: usize) -> Node {
+    let children: Vec<_> =
+        (0..8)
+            .map(|p| {
+                let words: Vec<_> = (0..12).map(|w| json!({
+                "type": "label", "id": format!("word-{p}-{w}"), "text": format!("Word {w}"),
+                "color": if p < passage || (p == passage && w <= word) { "#eeeeee" } else { "#999999" },
+                "width": 90, "height": 24, "on-click": format!("seek-{p}-{w}")
+            })).collect();
+                json!({"type": "hstack", "id": format!("passage-{p}"), "flex-wrap": "wrap",
+                   "gap": 6, "padding": 4, "children": words})
+            })
+            .collect();
+    serde_json::from_value(json!({"type": "window", "children": [{
+        "type": "message-scroller", "id": "transcript", "width": width, "height": 180,
+        "list-style": {"padding": 0}, "jump-button": false,
+        "follow-resume-delay": 3, "follow-generation": generation,
+        "scroll-to-item": format!("passage-{passage}"),
+        "scroll-generation": format!("{passage}-{word}"),
+        "follow-child": format!("word-{passage}-{word}"), "children": children
+    }]}))
+    .unwrap()
+}
+
 #[gpui_kit::test]
 async fn transcript_follow_keeps_wrapped_line_at_top_after_seeks_and_resize(
     cx: &mut TestAppContext,
@@ -166,26 +195,6 @@ async fn transcript_follow_keeps_wrapped_line_at_top_after_seeks_and_resize(
         let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
         Root::new(view, window, cx)
     });
-    let tree = |passage: usize, word: usize, width: usize| {
-        let children: Vec<_> = (0..8)
-            .map(|p| {
-                let words: Vec<_> = (0..12).map(|w| json!({
-                "type": "label", "id": format!("word-{p}-{w}"), "text": format!("Word {w}"),
-                "width": 90, "height": 24, "on-click": format!("seek-{p}-{w}")
-            })).collect();
-                json!({"type": "hstack", "id": format!("passage-{p}"), "flex-wrap": "wrap",
-                   "gap": 6, "padding": 4, "children": words})
-            })
-            .collect();
-        serde_json::from_value(json!({"type": "window", "children": [{
-            "type": "message-scroller", "id": "transcript", "width": width, "height": 180,
-            "list-style": {"padding": 0}, "jump-button": false,
-            "scroll-to-item": format!("passage-{passage}"),
-            "scroll-generation": format!("{passage}-{word}"),
-            "follow-child": format!("word-{passage}-{word}"), "children": children
-        }]}))
-        .unwrap()
-    };
     // Same line, next wrapped line, far forward, final line, backward, and reflow.
     for (passage, word, width) in [
         (0, 0, 240),
@@ -197,7 +206,11 @@ async fn transcript_follow_keeps_wrapped_line_at_top_after_seeks_and_resize(
         (2, 4, 160),
     ] {
         event_tx
-            .send(HostEvent::tree(tree(passage, word, width), None, vec![]))
+            .send(HostEvent::tree(
+                transcript_follow_tree(passage, word, width, 0),
+                None,
+                vec![],
+            ))
             .await
             .unwrap();
         settle_root(handle, cx);
@@ -219,6 +232,174 @@ async fn transcript_follow_keeps_wrapped_line_at_top_after_seeks_and_resize(
             .iter()
             .any(|(id, _)| id == "seek-2-4")
     );
+}
+
+fn transcript_word_y(handle: WindowHandle<Root>, cx: &mut TestAppContext, word: usize) -> f32 {
+    cx.update_window(handle.into(), |_, window, _| {
+        f32::from(
+            window
+                .find(gpui_kit::SharedString::from(format!("root-0.2/{word}")))
+                .bounds()
+                .top(),
+        )
+    })
+    .unwrap()
+}
+
+fn scroll_transcript(handle: WindowHandle<Root>, cx: &mut TestAppContext, delta: f32) {
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.scroll(
+            "transcript-follow-viewport",
+            ScrollDelta::Pixels(point(px(0.), px(delta))),
+            cx,
+        );
+    })
+    .unwrap();
+    paint_root(handle, cx);
+}
+
+#[gpui_kit::test]
+async fn transcript_manual_scroll_resumes_three_seconds_after_the_last_event(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        syntax::init(cx);
+    });
+    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(320.), px(260.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    event_tx
+        .send(HostEvent::tree(
+            transcript_follow_tree(2, 4, 240, 0),
+            None,
+            vec![],
+        ))
+        .await
+        .unwrap();
+    paint_root(handle, cx);
+    assert!(transcript_word_y(handle, cx, 4).abs() < 1.);
+
+    scroll_transcript(handle, cx, 80.);
+    let browsed_y = transcript_word_y(handle, cx, 4);
+    assert!(
+        browsed_y > 50.,
+        "manual scrolling must actually move the transcript: {browsed_y}"
+    );
+
+    // Playback still changes words and scroll-generation during the pause.
+    event_tx
+        .send(HostEvent::tree(
+            transcript_follow_tree(2, 6, 240, 0),
+            None,
+            vec![],
+        ))
+        .await
+        .unwrap();
+    paint_root(handle, cx);
+    assert!((transcript_word_y(handle, cx, 4) - browsed_y).abs() < 1.);
+    cx.executor().advance_clock(Duration::from_millis(2900));
+    paint_root(handle, cx);
+    assert!((transcript_word_y(handle, cx, 4) - browsed_y).abs() < 1.);
+
+    scroll_transcript(handle, cx, 20.);
+    let browsed_again_y = transcript_word_y(handle, cx, 4);
+    assert!(browsed_again_y > browsed_y + 10.);
+    cx.executor().advance_clock(Duration::from_millis(200));
+    paint_root(handle, cx);
+    assert!(
+        (transcript_word_y(handle, cx, 4) - browsed_again_y).abs() < 1.,
+        "the previous deadline must be cancelled"
+    );
+    cx.executor().advance_clock(Duration::from_millis(2799));
+    paint_root(handle, cx);
+    assert!((transcript_word_y(handle, cx, 4) - browsed_again_y).abs() < 1.);
+    cx.executor().advance_clock(Duration::from_millis(1));
+    paint_root(handle, cx);
+    assert!(
+        transcript_word_y(handle, cx, 6).abs() < 1.,
+        "resume at the latest playback word"
+    );
+
+    // Resume also works with no playback updates (paused audio or silence).
+    scroll_transcript(handle, cx, 60.);
+    assert!(transcript_word_y(handle, cx, 6) > 40.);
+    cx.executor().advance_clock(Duration::from_secs(3));
+    paint_root(handle, cx);
+    assert!(transcript_word_y(handle, cx, 6).abs() < 1.);
+
+    // Current position / word clicks bypass the delay via a separate token.
+    scroll_transcript(handle, cx, 60.);
+    event_tx
+        .send(HostEvent::tree(
+            transcript_follow_tree(2, 6, 240, 1),
+            None,
+            vec![],
+        ))
+        .await
+        .unwrap();
+    paint_root(handle, cx);
+    assert!(transcript_word_y(handle, cx, 6).abs() < 1.);
+}
+
+#[gpui_kit::test]
+async fn transcript_scrollbar_hold_waits_for_release_before_resuming(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        syntax::init(cx);
+    });
+    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(320.), px(260.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    event_tx
+        .send(HostEvent::tree(
+            transcript_follow_tree(2, 6, 240, 0),
+            None,
+            vec![],
+        ))
+        .await
+        .unwrap();
+    paint_root(handle, cx);
+    scroll_transcript(handle, cx, 60.);
+    let mut visual = VisualTestContext::from_window(handle.into(), cx);
+    // Clicking above the thumb moves toward the start; holding must never
+    // snap back, even when the pointer is stationary for more than 3 seconds.
+    let track = point(px(238.), px(18.));
+    visual.simulate_mouse_move(track, None, Modifiers::default());
+    visual.update(|window, cx| window.render_frame(cx));
+    visual.simulate_mouse_down(track, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    visual.executor().advance_clock(Duration::from_secs(4));
+    visual.run_until_parked();
+    visual.update(|window, cx| {
+        window.render_frame(cx);
+        let current = window.try_find("root-0.2/6");
+        assert!(
+            current.is_none_or(|word| f32::from(word.bounds().top()).abs() > 1.),
+            "holding the scrollbar must keep following suspended"
+        );
+    });
+    visual.simulate_mouse_up(track, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    visual.executor().advance_clock(Duration::from_millis(2999));
+    visual.run_until_parked();
+    visual.update(|window, cx| {
+        window.render_frame(cx);
+        let current = window.try_find("root-0.2/6");
+        assert!(current.is_none_or(|word| f32::from(word.bounds().top()).abs() > 1.));
+    });
+    visual.executor().advance_clock(Duration::from_millis(1));
+    visual.run_until_parked();
+    visual.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(f32::from(window.find("root-0.2/6").bounds().top()).abs() < 1.);
+    });
 }
 
 fn controls_tree(checked: bool, switched: bool, reverse: bool) -> Node {

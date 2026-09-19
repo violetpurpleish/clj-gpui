@@ -271,6 +271,10 @@ struct CommandSlot {
 
 struct MessageScrollerSlot {
     follow_viewport_height: Rc<Cell<f32>>,
+    follow_paused: Rc<Cell<bool>>,
+    follow_pointer_down: bool,
+    follow_resume_task: Option<gpui::Task<()>>,
+    follow_generation: Option<String>,
     state: Entity<MessageScrollerState>,
     items: Rc<RefCell<Vec<Node>>>,
     last_ids: Vec<String>,
@@ -4893,6 +4897,45 @@ impl RootView {
         state
     }
 
+    fn pause_message_scroller_follow(
+        &mut self,
+        key: &str,
+        delay: Duration,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(slot) = self.scrollers.get_mut(key) else {
+            return;
+        };
+        slot.follow_paused.set(true);
+        // Replacing the task cancels the old deadline, so momentum events and
+        // repeated gestures always get a full delay after the last event.
+        slot.follow_resume_task = None;
+        if !slot.follow_pointer_down {
+            let timer = cx.background_executor().timer(delay);
+            let key = key.to_string();
+            slot.follow_resume_task = Some(cx.spawn(async move |this, cx| {
+                timer.await;
+                let _ = this.update(cx, |this, cx| {
+                    if let Some(slot) = this.scrollers.get_mut(&key) {
+                        slot.follow_paused.set(false);
+                        // Realize the latest target even if it did not change
+                        // while browsing (paused audio or a gap in speech).
+                        slot.last_scroll = None;
+                        cx.notify();
+                    }
+                });
+            }));
+        }
+        cx.notify();
+    }
+
+    fn resume_message_scroller_follow(slot: &mut MessageScrollerSlot) {
+        slot.follow_resume_task = None;
+        slot.follow_pointer_down = false;
+        slot.follow_paused.set(false);
+        slot.last_scroll = None;
+    }
+
     fn apply_message_scroller_scroll(
         slot: &mut MessageScrollerSlot,
         node: &Node,
@@ -4938,6 +4981,9 @@ impl RootView {
             .clone()
             .filter(|id| !id.is_empty())
             .filter(|_| node.scroll_to_end != Some(true));
+        let follow_delay = node
+            .follow_resume_delay
+            .and_then(|seconds| Duration::try_from_secs_f32(seconds).ok());
         let follow_viewport_height = self
             .scrollers
             .get(key)
@@ -4967,6 +5013,10 @@ impl RootView {
                 key.to_string(),
                 MessageScrollerSlot {
                     follow_viewport_height: follow_viewport_height.clone(),
+                    follow_paused: Rc::new(Cell::new(false)),
+                    follow_pointer_down: false,
+                    follow_resume_task: None,
+                    follow_generation: None,
                     state,
                     items: Rc::new(RefCell::new(children)),
                     last_ids: ids.clone(),
@@ -5021,11 +5071,24 @@ impl RootView {
             slot.last_fps = fps;
         }
         if let Some(slot) = self.scrollers.get_mut(key) {
-            Self::apply_message_scroller_scroll(slot, node, &ids, cx);
+            let generation = chat::scroller_scroll_generation(node.follow_generation.as_ref());
+            if generation != slot.follow_generation {
+                slot.follow_generation = generation;
+                Self::resume_message_scroller_follow(slot);
+            } else if (follow_target.is_none() || follow_delay.is_none())
+                && slot.follow_paused.get()
+            {
+                Self::resume_message_scroller_follow(slot);
+            }
+            if !slot.follow_paused.get() {
+                Self::apply_message_scroller_scroll(slot, node, &ids, cx);
+            }
         }
         let slot = self.scrollers.get(key).expect("scroller slot");
+        let suspend_delay = follow_target.as_ref().and(follow_delay);
         let follow = follow_target.map(|target| overlay::ScrollerFollow {
             target,
+            paused: slot.follow_paused.clone(),
             viewport_height: follow_viewport_height,
             state: slot.state.clone(),
         });
@@ -5089,7 +5152,89 @@ impl RootView {
         // supplies viewport/box geometry so content/list/row slots stay
         // distinct from the scroller root.
         let scroller = apply_kit_visual_style(scroller, node, cx);
-        viewport_box_sized(scroller, node, 400.0)
+        if let Some(delay) = suspend_delay {
+            let view = cx.weak_entity();
+            let key = key.to_string();
+            let viewport_id = SharedString::from(format!("{key}-follow-viewport"));
+            // Paint the observer before Kit, so its capture listeners run
+            // before ScrollableMask consumes wheel/trackpad events. Observe
+            // without consuming: Kit continues to own all native scrolling.
+            let observer = canvas(
+                |bounds, window, _| window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal),
+                move |_, hitbox, window, _| {
+                    let wheel_view = view.clone();
+                    let wheel_key = key.clone();
+                    let hitbox_id = hitbox.id;
+                    window.on_mouse_event(
+                        move |event: &gpui::ScrollWheelEvent, phase, window, cx| {
+                            if phase.capture()
+                                && hitbox_id.should_handle_scroll(window)
+                                && event.delta.pixel_delta(px(1.)).y != px(0.)
+                            {
+                                let _ = wheel_view.update(cx, |this, cx| {
+                                    this.pause_message_scroller_follow(&wheel_key, delay, cx);
+                                });
+                            }
+                        },
+                    );
+                    // Holding/dragging the scrollbar suspends following until
+                    // release. Word clicks explicitly resume via follow-generation.
+                    let down_view = view.clone();
+                    let down_key = key.clone();
+                    window.on_mouse_event(
+                        move |event: &gpui::MouseDownEvent, phase, window, cx| {
+                            if phase.capture()
+                                && hitbox_id.is_hovered(window)
+                                && event.button == gpui::MouseButton::Left
+                            {
+                                let _ = down_view.update(cx, |this, cx| {
+                                    if let Some(slot) = this.scrollers.get_mut(&down_key) {
+                                        slot.follow_pointer_down = true;
+                                    }
+                                    this.pause_message_scroller_follow(&down_key, delay, cx);
+                                });
+                            }
+                        },
+                    );
+                    let up_view = view.clone();
+                    let up_key = key.clone();
+                    window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, _, cx| {
+                        if phase.capture() && event.button == gpui::MouseButton::Left {
+                            let _ = up_view.update(cx, |this, cx| {
+                                let held = this
+                                    .scrollers
+                                    .get(&up_key)
+                                    .is_some_and(|slot| slot.follow_pointer_down);
+                                if held {
+                                    this.scrollers.get_mut(&up_key).unwrap().follow_pointer_down =
+                                        false;
+                                    this.pause_message_scroller_follow(&up_key, delay, cx);
+                                }
+                            });
+                        }
+                    });
+                },
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full();
+            viewport_box_sized(
+                div()
+                    .id(viewport_id)
+                    .test_support()
+                    .debug_selector(|| "follow-viewport".into())
+                    .relative()
+                    .size_full()
+                    .min_h_0()
+                    .child(observer)
+                    .child(scroller),
+                node,
+                400.0,
+            )
+        } else {
+            viewport_box_sized(scroller, node, 400.0)
+        }
     }
 
     fn render_virtual_list(

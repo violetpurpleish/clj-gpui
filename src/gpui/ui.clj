@@ -2980,6 +2980,7 @@
                                  :else (wire-id item))))
       (keyword? (:scroll-generation opts)) (update :scroll-generation name)
       (some? (:follow-child opts)) (update :follow-child wire-id)
+      (keyword? (:follow-generation opts)) (update :follow-generation name)
       (some? (:stack-style opts)) (update :stack-style style-slot)
       (some? (:shimmer-style opts)) (update :shimmer-style style-slot)
       (some? (:separator-style opts)) (update :separator-style style-slot)
@@ -3382,7 +3383,12 @@
   a descendant id whose rendered line stays at the viewport top, including
   after wrapping changes. Pair with `:scroll-to-item` to realize its row.
   Following reserves a viewport of trailing space so the last line can
-  also reach the top. Omit it to allow ordinary manual scrolling. Kit's
+  also reach the top. `:follow-resume-delay` (seconds) lets wheel/trackpad
+  scrolling suspend following until that delay after the last event;
+  scrollbar pointer interaction suspends until release plus the delay.
+  Change `:follow-generation` to resume immediately (keep it independent
+  of playback-driven `:scroll-generation`). Omit the delay to keep following
+  locked, or omit `:follow-child` to allow ordinary manual scrolling. Kit's
   constructor takes an arbitrary row renderer (`IntoElement`); scroller
   rows here paint the static overlay subset plus this chat family
   (not list / data-table / editor) because they cannot re-enter

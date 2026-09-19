@@ -1574,6 +1574,12 @@ pub struct Node {
     /// Pair with scroll-to-item to realize its virtual row after a seek.
     #[serde(default, rename = "follow-child")]
     pub follow_child: Option<String>,
+    /// Seconds to suspend following after manual scrolling. Omitted disables suspension.
+    #[serde(default, rename = "follow-resume-delay")]
+    pub follow_resume_delay: Option<f32>,
+    /// An explicit resume token, independent of playback-driven scroll-generation.
+    #[serde(default, rename = "follow-generation")]
+    pub follow_generation: Option<Value>,
     /// MessageScroller: Kit `scroll_to_end` (resume tail follow).
     /// True applies; omitted / false leaves native scroll.
     #[serde(default, rename = "scroll-to-end")]

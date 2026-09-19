@@ -1665,10 +1665,14 @@
                     (ui/message-scroller {:id "chat"
                                           :scroll-to-item "m2"
                                           :follow-child :word-7
+                                          :follow-resume-delay 3
+                                          :follow-generation :resume-2
                                           :scroll-generation 1}
                                          (ui/message {:id "m2"} (ui/bubble "Hi"))))]
       (is (= "m2" (:scroll-to-item exported)))
       (is (= "word-7" (:follow-child exported)))
+      (is (= 3 (:follow-resume-delay exported)))
+      (is (= "resume-2" (:follow-generation exported)))
       (is (= 1 (:scroll-generation exported))))
     (let [n (ui/message-scroller {:id "chat"
                                   :scroll-to-item " message-1 "}
