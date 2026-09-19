@@ -3380,9 +3380,10 @@
   `:replace-generation`. An unresolved or rejected `:scroll-to-item`
   is not marked applied, so the same request can succeed after
   append/load. Requests run after child-list sync. `:follow-child` is
-  a descendant id whose rendered line stays at the viewport top, including
-  after wrapping changes. Pair with `:scroll-to-item` to realize its row.
-  Following reserves a viewport of trailing space so the last line can
+  a row or descendant id whose top stays at the viewport top, including
+  after wrapping changes. Target a paragraph row to follow whole paragraphs,
+  or a word to follow wrapped lines. Pair with `:scroll-to-item` to realize
+  its row. Following reserves a viewport of trailing space so the last row can
   also reach the top. `:follow-resume-delay` (seconds) lets wheel/trackpad
   scrolling suspend following until that delay after the last event;
   scrollbar pointer interaction suspends until release plus the delay.

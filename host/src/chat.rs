@@ -294,84 +294,92 @@ pub fn scroller_scroll_plan(
     Some((apply, token))
 }
 
-pub fn node_fingerprint(node: &Node) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    format!("{:?}", strip_callback_ids(node)).hash(&mut hasher);
-    hasher.finish()
+/// Comparable layout snapshot, built only when Clojure supplies new rows.
+/// Avoid formatting the enormous Debug representation of every Node. Callback
+/// IDs and text colors change during playback without changing row geometry.
+pub fn scroller_layout(node: &Node) -> Node {
+    let mut layout = node.clone();
+    normalize_scroller_layout(&mut layout);
+    layout
 }
 
-fn strip_callback_ids(node: &Node) -> Node {
-    let mut n = node.clone();
-    n.on_click = None;
-    n.on_change = None;
-    n.on_release = None;
-    n.on_submit = None;
-    n.on_double_click = None;
-    n.on_blur = None;
-    n.on_escape = None;
-    n.on_close = None;
-    n.on_copied = None;
-    n.on_ok = None;
-    n.on_cancel = None;
-    n.on_confirm = None;
-    n.on_open_change = None;
-    n.on_forward_change = None;
-    n.children = n.children.iter().map(strip_callback_ids).collect();
-    n.trigger = n.trigger.as_deref().map(strip_callback_ids).map(Box::new);
-    n.footer = n.footer.as_deref().map(strip_callback_ids).map(Box::new);
-    n.stack_style = n
-        .stack_style
-        .as_deref()
-        .map(strip_callback_ids)
-        .map(Box::new);
-    n.shimmer_style = n
-        .shimmer_style
-        .as_deref()
-        .map(strip_callback_ids)
-        .map(Box::new);
-    n.separator_style = n
-        .separator_style
-        .as_deref()
-        .map(strip_callback_ids)
-        .map(Box::new);
-    n.content_style = n
-        .content_style
-        .as_deref()
-        .map(strip_callback_ids)
-        .map(Box::new);
-    n.list_style = n
-        .list_style
-        .as_deref()
-        .map(strip_callback_ids)
-        .map(Box::new);
-    n.row_style = n.row_style.as_deref().map(strip_callback_ids).map(Box::new);
-    n.jump_button_style = n
-        .jump_button_style
-        .as_deref()
-        .map(strip_callback_ids)
-        .map(Box::new);
-    n.jump_button_renderer = n
-        .jump_button_renderer
-        .as_deref()
-        .map(strip_callback_ids)
-        .map(Box::new);
-    n
+fn normalize_scroller_layout(n: &mut Node) {
+    // Retain callback presence: adding/removing a click handler can add/remove
+    // a host wrapper. Only generated IDs are irrelevant to layout.
+    for id in [
+        &mut n.on_click,
+        &mut n.on_change,
+        &mut n.on_release,
+        &mut n.on_submit,
+        &mut n.on_double_click,
+        &mut n.on_blur,
+        &mut n.on_escape,
+        &mut n.on_close,
+        &mut n.on_copied,
+        &mut n.on_ok,
+        &mut n.on_cancel,
+        &mut n.on_confirm,
+        &mut n.on_open_change,
+        &mut n.on_forward_change,
+        &mut n.on_query,
+        &mut n.on_select,
+        &mut n.on_export,
+        &mut n.on_sort,
+        &mut n.on_load_more,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        id.clear();
+    }
+    n.color = None;
+    for child in n.children.iter_mut().chain(&mut n.left).chain(&mut n.right) {
+        normalize_scroller_layout(child);
+    }
+    for child in [
+        &mut n.trigger,
+        &mut n.footer,
+        &mut n.stack_style,
+        &mut n.shimmer_style,
+        &mut n.separator_style,
+        &mut n.content_style,
+        &mut n.list_style,
+        &mut n.row_style,
+        &mut n.jump_button_style,
+        &mut n.jump_button_renderer,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        normalize_scroller_layout(child);
+    }
+    for item in &mut n.items {
+        if let Some(content) = &mut item.content {
+            normalize_scroller_layout(content);
+        }
+        for child in &mut item.children {
+            normalize_scroller_layout(child);
+        }
+    }
 }
 
-/// True when rows that already existed in `prev` changed their render fingerprint.
+/// True when rows that already existed in `prev` changed their layout.
 ///
 /// Child-list splice (append/prepend) does not remeasure by itself. Streaming
 /// text, upload status, or reactions on a surviving row still need `remeasure`.
-pub fn scroller_survivors_changed(edit: &ScrollerEdit, prev_fps: &[u64], next_fps: &[u64]) -> bool {
+pub fn scroller_survivors_changed<T: PartialEq>(
+    edit: &ScrollerEdit,
+    prev_layouts: &[T],
+    next_layouts: &[T],
+) -> bool {
     match edit {
-        ScrollerEdit::Leave => prev_fps != next_fps,
+        ScrollerEdit::Leave => prev_layouts != next_layouts,
         ScrollerEdit::Reset { .. } => false,
         ScrollerEdit::Append(added) => {
-            let keep = next_fps.len().saturating_sub(*added);
-            prev_fps != next_fps.get(..keep).unwrap_or(&[])
+            let keep = next_layouts.len().saturating_sub(*added);
+            prev_layouts != next_layouts.get(..keep).unwrap_or(&[])
         }
-        ScrollerEdit::Prepend(added) => prev_fps != next_fps.get(*added..).unwrap_or(&[]),
+        ScrollerEdit::Prepend(added) => prev_layouts != next_layouts.get(*added..).unwrap_or(&[]),
     }
 }
 
@@ -1121,7 +1129,7 @@ mod tests {
     }
 
     #[test]
-    fn fingerprint_ignores_generated_callback_ids() {
+    fn layout_ignores_generated_callback_ids() {
         let a: Node = serde_json::from_value(json!({
             "type": "message",
             "text": "Hi",
@@ -1142,7 +1150,7 @@ mod tests {
             }]
         }))
         .unwrap();
-        assert_eq!(node_fingerprint(&a), node_fingerprint(&b));
+        assert_eq!(scroller_layout(&a), scroller_layout(&b));
         let changed: Node = serde_json::from_value(json!({
             "type": "message",
             "text": "Hello",
@@ -1153,11 +1161,44 @@ mod tests {
             }]
         }))
         .unwrap();
-        assert_ne!(node_fingerprint(&a), node_fingerprint(&changed));
+        assert_ne!(scroller_layout(&a), scroller_layout(&changed));
     }
 
     #[test]
-    fn append_and_prepend_detect_survivor_fingerprint_changes() {
+    fn playback_colors_preserve_layout_but_text_font_and_size_do_not() {
+        let a: Node = serde_json::from_value(json!({
+            "type": "hstack", "flex-wrap": "wrap", "gap": 6,
+            "children": [{"type": "label", "text": "Readalong", "color": "#999999",
+                          "font-size": 23, "on-click": "cb-1"}]
+        }))
+        .unwrap();
+        let mut b = a.clone();
+        b.children[0].color = Some("#eeeeee".into());
+        b.children[0].on_click = Some("cb-20001".into());
+        assert_eq!(scroller_layout(&a), scroller_layout(&b));
+        for (field, value) in [
+            ("text", json!("Longer text")),
+            ("font-size", json!(30)),
+            ("width", json!(140)),
+            ("on-click", json!(null)),
+        ] {
+            let mut changed = json!({"type": "hstack", "flex-wrap": "wrap", "gap": 6,
+                "children": [{"type": "label", "text": "Readalong", "color": "#999999",
+                              "font-size": 23, "on-click": "cb-1"}]});
+            changed["children"][0][field] = value;
+            let changed: Node = serde_json::from_value(changed).unwrap();
+            assert_ne!(
+                scroller_layout(&a),
+                scroller_layout(&changed),
+                "{field} affects layout"
+            );
+        }
+        assert_eq!(a.children[0].on_click.as_deref(), Some("cb-1"));
+        assert_eq!(b.children[0].color.as_deref(), Some("#eeeeee"));
+    }
+
+    #[test]
+    fn append_and_prepend_detect_survivor_layout_changes() {
         let prev = [1u64, 2];
         let append_same = [1u64, 2, 3];
         let append_changed = [1u64, 9, 3];

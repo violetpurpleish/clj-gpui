@@ -246,6 +246,76 @@ fn transcript_word_y(handle: WindowHandle<Root>, cx: &mut TestAppContext, word: 
     .unwrap()
 }
 
+#[gpui_kit::test]
+async fn transcript_can_follow_whole_paragraphs_without_moving_between_words(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        syntax::init(cx);
+    });
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(320.), px(260.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    for (passage, word, width) in [
+        (2, 0, 240),
+        (2, 6, 240),
+        (3, 0, 240),
+        (7, 11, 240),
+        (2, 6, 160),
+    ] {
+        let mut tree = transcript_follow_tree(passage, word, width, 0);
+        tree.children[0].follow_child = Some(format!("passage-{passage}"));
+        tree.children[0].scroll_generation = Some(json!(passage));
+        event_tx
+            .send(HostEvent::tree(tree, None, vec![]))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        cx.update_window(handle.into(), |_, window, _| {
+            let first = window
+                .find(gpui_kit::SharedString::from(format!("root-0.{passage}/0")))
+                .bounds();
+            assert!(
+                (f32::from(first.top()) - 4.).abs() < 1.,
+                "paragraph starts at the top, with its 4px padding: {first:?}"
+            );
+            if word >= 6 {
+                let current = window
+                    .find(gpui_kit::SharedString::from(format!(
+                        "root-0.{passage}/{word}"
+                    )))
+                    .bounds();
+                assert!(
+                    current.top() > first.top(),
+                    "spoken word must stay on its wrapped line"
+                );
+            }
+        })
+        .unwrap();
+    }
+    scroll_transcript(handle, cx, 60.);
+    assert!(transcript_word_y(handle, cx, 0) > 4.);
+    cx.executor().advance_clock(Duration::from_millis(3000));
+    paint_root(handle, cx);
+    assert!((transcript_word_y(handle, cx, 0) - 4.).abs() < 1.);
+    // The paragraph's layout anchor leaves individual word seeking intact.
+    drain(&cmd_rx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.click("root-0.2/0", cx)
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(
+        callback_pairs(&drain(&cmd_rx))
+            .iter()
+            .any(|(id, _)| id == "seek-2-0")
+    );
+}
+
 fn scroll_transcript(handle: WindowHandle<Root>, cx: &mut TestAppContext, delta: f32) {
     cx.update_window(handle.into(), |_, window, cx| {
         window.scroll(
@@ -256,6 +326,78 @@ fn scroll_transcript(handle: WindowHandle<Root>, cx: &mut TestAppContext, delta:
     })
     .unwrap();
     paint_root(handle, cx);
+}
+
+#[gpui_kit::test]
+async fn long_transcript_scroll_reuses_rows_until_a_new_snapshot(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        syntax::init(cx);
+    });
+    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(640.), px(480.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let mut tree = transcript_follow_tree(2, 4, 600, 0);
+    let scroller = &mut tree.children[0];
+    scroller.height = Some(420.);
+    scroller.children = (0..400)
+        .map(|p| Node {
+            id: Some(format!("passage-{p}")),
+            children: (0..50)
+                .map(|w| Node {
+                    id: Some(format!("word-{p}-{w}")),
+                    text: Some("Readalong".into()),
+                    on_click: Some(format!("seek-{p}-{w}")),
+                    ..scroller.children[0].children[0].clone()
+                })
+                .collect(),
+            ..scroller.children[0].clone()
+        })
+        .collect();
+    let mut updated = tree.clone();
+    updated.children[0].children[2].children[4].color = Some("#ffffff".into());
+    updated.children[0].children[2].children[4].on_click = Some("seek-current".into());
+    event_tx
+        .send(HostEvent::tree(tree, None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let view = production_view(handle, cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.test_scroller_sync_count("transcript")),
+        1
+    );
+    let start = std::time::Instant::now();
+    for _ in 0..12 {
+        scroll_transcript(handle, cx, -20.);
+    }
+    eprintln!("20,000 words, 12 wheel events: {:?}", start.elapsed());
+    assert_eq!(
+        view.read_with(cx, |view, _| view.test_scroller_sync_count("transcript")),
+        1,
+        "wheel frames must not rebuild or compare all rows"
+    );
+
+    // Unsequenced playback snapshots still refresh rows and callback IDs.
+    let start = std::time::Instant::now();
+    event_tx
+        .send(HostEvent::tree(updated, None, vec![]))
+        .await
+        .unwrap();
+    paint_root(handle, cx);
+    eprintln!("20,000 words, playback snapshot: {:?}", start.elapsed());
+    assert_eq!(
+        view.read_with(cx, |view, _| view.test_scroller_sync_count("transcript")),
+        2
+    );
+    scroll_transcript(handle, cx, -20.);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.test_scroller_sync_count("transcript")),
+        2
+    );
 }
 
 #[gpui_kit::test]

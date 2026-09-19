@@ -869,7 +869,7 @@ pub(crate) fn paint_scroller_tree(
     paint_static_tree(node, path, Some(cmd_tx), cx)
 }
 
-/// Native layout supplies the line position, so following survives font and width changes.
+/// Native layout supplies the target position, so following survives font and width changes.
 #[derive(Clone)]
 pub(crate) struct ScrollerFollow {
     pub target: String,
@@ -919,8 +919,8 @@ fn paint_following_static_tree(
                         return;
                     }
                     // List installs its viewport mask before prepainting each row.
-                    // Requesting a viewport-sized rectangle beginning at the word
-                    // aligns the word's line, not just its enclosing paragraph.
+                    // A viewport-sized rectangle aligns the target's top. The
+                    // target can be an individual word or the entire paragraph.
                     let height = window.content_mask().bounds.size.height;
                     if (follow.viewport_height.get() - f32::from(height)).abs() > 0.5 {
                         follow.viewport_height.set(f32::from(height));

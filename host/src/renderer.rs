@@ -278,7 +278,11 @@ struct MessageScrollerSlot {
     state: Entity<MessageScrollerState>,
     items: Rc<RefCell<Vec<Node>>>,
     last_ids: Vec<String>,
-    last_fps: Vec<u64>,
+    last_layouts: Vec<Node>,
+    tree_revision: u64,
+    follow_tail_height: Option<f32>,
+    #[cfg(test)]
+    sync_count: usize,
     /// Last successfully applied `scroll_to_item` / `scroll_to_end`
     /// request. Unresolved items are not stored, so the same request can
     /// succeed after append/load. Omitted Clojure request leaves native
@@ -465,8 +469,19 @@ fn zenity_to_cmd(request_id: String, pick: ZenityPick, portal_err: &str) -> Cmd 
     }
 }
 
+// Collected once per Clojure snapshot, never by native scroll/animation frames.
+#[derive(Default)]
+struct TreeOverlays {
+    dialogs: Vec<overlay::DialogSpec>,
+    sheet: Option<overlay::SheetSpec>,
+    notifications: Vec<overlay::NotificationSpec>,
+    native_menus: Vec<(String, Node)>,
+}
+
 pub struct RootView {
-    tree: Option<Node>,
+    tree: Option<Rc<Node>>,
+    tree_revision: u64,
+    tree_overlays: TreeOverlays,
     status: String,
     error: Option<String>,
     nrepl_port: u16,
@@ -663,6 +678,11 @@ impl RootView {
     }
 
     #[cfg(test)]
+    pub(crate) fn test_scroller_sync_count(&self, key: &str) -> usize {
+        self.scrollers[key].sync_count
+    }
+
+    #[cfg(test)]
     pub fn new(
         nrepl_port: u16,
         cmd_tx: mpsc::Sender<Cmd>,
@@ -720,7 +740,14 @@ impl RootView {
                         HostEvent::Tree(tree, seq, themes) => {
                             catalog::install_clojure_sets(themes);
                             overlay::acknowledge_dialog_tree(&mut view.dialog_keys, &tree);
-                            view.tree = Some(*tree);
+                            view.tree_overlays = TreeOverlays {
+                                dialogs: overlay::collect_open_dialogs(&tree),
+                                sheet: overlay::collect_open_sheet(&tree),
+                                notifications: overlay::collect_notifications(&tree),
+                                native_menus: overlay::collect_native_menus(&tree),
+                            };
+                            view.tree = Some(Rc::from(tree));
+                            view.tree_revision += 1;
                             view.tree_seq = seq;
                             view.callback_queue.tree_installed(seq);
                             view.flush_callback_queue();
@@ -775,6 +802,8 @@ impl RootView {
         }
         Self {
             tree: None,
+            tree_revision: 0,
+            tree_overlays: TreeOverlays::default(),
             status: format!("nREPL 127.0.0.1:{nrepl_port} · loading Clojure UI"),
             error: None,
             nrepl_port,
@@ -1637,12 +1666,15 @@ impl RootView {
 
         let element = match node.kind.as_str() {
             "window" => {
-                let mut layout = node.clone();
+                let mut layout = outer_layout(node);
                 layout.width = None;
                 layout.height = None;
-                apply_style(v_flex().id(eid(&key)).size_full(), &layout, cx)
-                    .children(self.render_children(node, path, window, cx))
-                    .into_any_element()
+                apply_outer_layout(
+                    apply_kit_visual_style(v_flex().id(eid(&key)).size_full(), node, cx),
+                    &layout,
+                )
+                .children(self.render_children(node, path, window, cx))
+                .into_any_element()
             }
             "label" => {
                 let painted = apply_style(mapping::kit_label(node), node, cx);
@@ -3949,11 +3981,7 @@ impl RootView {
     }
 
     fn sync_native_menus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let menus = self
-            .tree
-            .as_ref()
-            .map(overlay::collect_native_menus)
-            .unwrap_or_default();
+        let menus = self.tree_overlays.native_menus.clone();
         let mut to_show = Vec::new();
         let mut live_keys = HashSet::new();
         for (key, node) in menus {
@@ -3981,11 +4009,7 @@ impl RootView {
     }
 
     fn sync_dialogs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let wanted = self
-            .tree
-            .as_ref()
-            .map(overlay::collect_open_dialogs)
-            .unwrap_or_default();
+        let wanted = self.tree_overlays.dialogs.clone();
         let wanted_keys = overlay::dialog_keys(&wanted);
         let crate_open = window.has_active_dialog(cx);
         let keys_changed = wanted_keys != self.dialog_keys;
@@ -4066,7 +4090,7 @@ impl RootView {
     }
 
     fn sync_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let wanted = self.tree.as_ref().and_then(overlay::collect_open_sheet);
+        let wanted = self.tree_overlays.sheet.clone();
         let wanted_key = wanted.as_ref().map(|spec| spec.key.clone());
         let crate_open = window.has_active_sheet(cx);
         let keys_changed = wanted_key != self.sheet_key;
@@ -4130,11 +4154,7 @@ impl RootView {
     }
 
     fn sync_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let wanted = self
-            .tree
-            .as_ref()
-            .map(overlay::collect_notifications)
-            .unwrap_or_default();
+        let wanted = self.tree_overlays.notifications.clone();
         let wanted_keys: HashSet<String> = wanted.iter().map(|spec| spec.key.clone()).collect();
         self.note_waiting.retain(|key| wanted_keys.contains(key));
 
@@ -4939,7 +4959,6 @@ impl RootView {
     fn apply_message_scroller_scroll(
         slot: &mut MessageScrollerSlot,
         node: &Node,
-        ids: &[String],
         cx: &mut Context<Self>,
     ) {
         let request =
@@ -4949,7 +4968,7 @@ impl RootView {
             slot.last_scroll.as_ref(),
             request.as_ref(),
             generation.as_deref(),
-            ids,
+            &slot.last_ids,
         ) else {
             return;
         };
@@ -4989,86 +5008,119 @@ impl RootView {
             .get(key)
             .map(|slot| slot.follow_viewport_height.clone())
             .unwrap_or_else(|| Rc::new(Cell::new(f32::from(window.viewport_size().height))));
-        let mut children = node.children.clone();
-        if follow_target.is_some() {
-            // A virtual trailing row lets even the last real line reach the top.
-            children.push(Node {
-                kind: "spacer".into(),
-                id: Some(format!("{key}-follow-tail")),
-                height: Some(follow_viewport_height.get()),
-                ..Node::default()
-            });
-        }
-        let ids: Vec<String> = children
-            .iter()
-            .enumerate()
-            .map(|(index, child)| chat::scroller_item_id(child, index))
-            .collect();
-        let fps: Vec<u64> = children.iter().map(chat::node_fingerprint).collect();
-        if !self.scrollers.contains_key(key) {
-            let item_count = children.len();
-            let state = cx.new(|cx| MessageScrollerState::new(item_count, cx));
-            let observe = cx.observe(&state, |_, _, cx| cx.notify());
-            self.scrollers.insert(
-                key.to_string(),
-                MessageScrollerSlot {
-                    follow_viewport_height: follow_viewport_height.clone(),
-                    follow_paused: Rc::new(Cell::new(false)),
-                    follow_pointer_down: false,
-                    follow_resume_task: None,
-                    follow_generation: None,
-                    state,
-                    items: Rc::new(RefCell::new(children)),
-                    last_ids: ids.clone(),
-                    last_fps: fps,
-                    last_scroll: None,
-                    _observe: observe,
-                },
-            );
-        } else if let Some(slot) = self.scrollers.get_mut(key) {
-            match chat::scroller_edit(&slot.last_ids, &ids) {
-                chat::ScrollerEdit::Leave => {
-                    if chat::scroller_survivors_changed(
-                        &chat::ScrollerEdit::Leave,
-                        &slot.last_fps,
-                        &fps,
-                    ) {
-                        slot.state.update(cx, |state, cx| state.remeasure(cx));
+        let tail_height = follow_target.as_ref().map(|_| follow_viewport_height.get());
+        let needs_sync = self
+            .scrollers
+            .get(key)
+            .is_none_or(|slot| slot.tree_revision != self.tree_revision);
+        if needs_sync {
+            let mut children = node.children.clone();
+            if let Some(height) = tail_height {
+                // A virtual trailing row lets even the last real line reach the top.
+                children.push(Node {
+                    kind: "spacer".into(),
+                    id: Some(format!("{key}-follow-tail")),
+                    height: Some(height),
+                    ..Node::default()
+                });
+            }
+            let ids: Vec<String> = children
+                .iter()
+                .enumerate()
+                .map(|(index, child)| chat::scroller_item_id(child, index))
+                .collect();
+            let layouts: Vec<Node> = children.iter().map(chat::scroller_layout).collect();
+            if let Some(slot) = self.scrollers.get_mut(key) {
+                match chat::scroller_edit(&slot.last_ids, &ids) {
+                    chat::ScrollerEdit::Leave => {
+                        // Paint-only changes (such as karaoke colors) preserve the
+                        // measured row heights and the user's scroll position.
+                        for (index, (prev, next)) in
+                            slot.last_layouts.iter().zip(&layouts).enumerate()
+                        {
+                            if prev != next {
+                                slot.state.update(cx, |state, cx| {
+                                    state.remeasure_items(index..index + 1, cx)
+                                });
+                            }
+                        }
+                    }
+                    chat::ScrollerEdit::Reset { count } => {
+                        slot.state.update(cx, |state, cx| state.reset(count, cx));
+                    }
+                    chat::ScrollerEdit::Append(n) => {
+                        let changed = chat::scroller_survivors_changed(
+                            &chat::ScrollerEdit::Append(n),
+                            &slot.last_layouts,
+                            &layouts,
+                        );
+                        slot.state.update(cx, |state, cx| {
+                            let _ = state.append(n, cx);
+                            if changed {
+                                state.remeasure(cx);
+                            }
+                        });
+                    }
+                    chat::ScrollerEdit::Prepend(n) => {
+                        let changed = chat::scroller_survivors_changed(
+                            &chat::ScrollerEdit::Prepend(n),
+                            &slot.last_layouts,
+                            &layouts,
+                        );
+                        slot.state.update(cx, |state, cx| {
+                            let _ = state.prepend(n, cx);
+                            if changed {
+                                state.remeasure(cx);
+                            }
+                        });
                     }
                 }
-                chat::ScrollerEdit::Reset { count } => {
-                    slot.state.update(cx, |state, cx| state.reset(count, cx));
+                *slot.items.borrow_mut() = children;
+                slot.last_ids = ids;
+                slot.last_layouts = layouts;
+                slot.tree_revision = self.tree_revision;
+                slot.follow_tail_height = tail_height;
+                #[cfg(test)]
+                {
+                    slot.sync_count += 1;
                 }
-                chat::ScrollerEdit::Append(n) => {
-                    let survivor_changed = chat::scroller_survivors_changed(
-                        &chat::ScrollerEdit::Append(n),
-                        &slot.last_fps,
-                        &fps,
-                    );
-                    slot.state.update(cx, |state, cx| {
-                        let _ = state.append(n, cx);
-                        if survivor_changed {
-                            state.remeasure(cx);
-                        }
-                    });
-                }
-                chat::ScrollerEdit::Prepend(n) => {
-                    let survivor_changed = chat::scroller_survivors_changed(
-                        &chat::ScrollerEdit::Prepend(n),
-                        &slot.last_fps,
-                        &fps,
-                    );
-                    slot.state.update(cx, |state, cx| {
-                        let _ = state.prepend(n, cx);
-                        if survivor_changed {
-                            state.remeasure(cx);
-                        }
-                    });
-                }
+            } else {
+                let state = cx.new(|cx| MessageScrollerState::new(children.len(), cx));
+                let observe = cx.observe(&state, |_, _, cx| cx.notify());
+                self.scrollers.insert(
+                    key.to_string(),
+                    MessageScrollerSlot {
+                        follow_viewport_height: follow_viewport_height.clone(),
+                        follow_paused: Rc::new(Cell::new(false)),
+                        follow_pointer_down: false,
+                        follow_resume_task: None,
+                        follow_generation: None,
+                        state,
+                        items: Rc::new(RefCell::new(children)),
+                        last_ids: ids,
+                        last_layouts: layouts,
+                        tree_revision: self.tree_revision,
+                        follow_tail_height: tail_height,
+                        #[cfg(test)]
+                        sync_count: 1,
+                        last_scroll: None,
+                        _observe: observe,
+                    },
+                );
             }
-            *slot.items.borrow_mut() = children;
-            slot.last_ids = ids.clone();
-            slot.last_fps = fps;
+        } else if let Some(slot) = self.scrollers.get_mut(key)
+            && tail_height != slot.follow_tail_height
+        {
+            // Layout can discover the viewport height without a new tree.
+            // Update only the spacer; never revisit the transcript's words.
+            if let Some(height) = tail_height {
+                let index = slot.last_ids.len() - 1;
+                slot.items.borrow_mut()[index].height = Some(height);
+                slot.last_layouts[index].height = Some(height);
+                slot.state
+                    .update(cx, |state, cx| state.remeasure_items(index..index + 1, cx));
+            }
+            slot.follow_tail_height = tail_height;
         }
         if let Some(slot) = self.scrollers.get_mut(key) {
             let generation = chat::scroller_scroll_generation(node.follow_generation.as_ref());
@@ -5081,7 +5133,7 @@ impl RootView {
                 Self::resume_message_scroller_follow(slot);
             }
             if !slot.follow_paused.get() {
-                Self::apply_message_scroller_scroll(slot, node, &ids, cx);
+                Self::apply_message_scroller_scroll(slot, node, cx);
             }
         }
         let slot = self.scrollers.get(key).expect("scroller slot");
@@ -5634,15 +5686,20 @@ impl RootView {
             ScrollExtent::Px(height) => wrap.h(px(height)),
             ScrollExtent::Fill => wrap.flex_1(),
         };
-        let mut inner = node.clone();
+        let mut inner = outer_layout(node);
         inner.height = None;
         inner.width = None;
         inner.size = None;
-        inner.flex = None;
+        inner.flex_fill = false;
+        inner.shrink_width = mapping::text_needs_min_w_0(node);
+        inner.shrink_height = false;
         wrap.child(
-            apply_style(v_flex().id(eid(&format!("{key}-body"))), &inner, cx)
-                .overflow_y_scrollbar()
-                .children(self.render_children(node, path, window, cx)),
+            apply_outer_layout(
+                apply_kit_visual_style(v_flex().id(eid(&format!("{key}-body"))), node, cx),
+                &inner,
+            )
+            .overflow_y_scrollbar()
+            .children(self.render_children(node, path, window, cx)),
         )
         .into_any_element()
     }
@@ -5655,8 +5712,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         node.children
-            .clone()
-            .into_iter()
+            .iter()
             .enumerate()
             .filter_map(|(index, child)| {
                 if child.kind == "dialog"
@@ -5666,7 +5722,7 @@ impl RootView {
                 {
                     None
                 } else {
-                    Some(self.render_node(&child, &format!("{path}-{index}"), window, cx))
+                    Some(self.render_node(child, &format!("{path}-{index}"), window, cx))
                 }
             })
             .collect()
@@ -6517,8 +6573,11 @@ fn outer_layout(node: &Node) -> OuterLayout {
     }
 }
 
-fn apply_outer_box_style<E: Styled>(mut el: E, node: &Node) -> E {
-    let layout = outer_layout(node);
+fn apply_outer_box_style<E: Styled>(el: E, node: &Node) -> E {
+    apply_outer_layout(el, &outer_layout(node))
+}
+
+fn apply_outer_layout<E: Styled>(mut el: E, layout: &OuterLayout) -> E {
     if let Some(width) = layout.width {
         el = el.w(px(width));
     }
