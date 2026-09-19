@@ -13,8 +13,8 @@ use gpui_kit::component::input::Position;
 use gpui_kit::component::slider::SliderValue;
 use gpui_kit::test::{TestAppContextExt, TestWindowExt};
 use gpui_kit::{
-    AppContext as _, Axis, Entity, EntityInputHandler as _, Modifiers, MouseButton, ScrollDelta,
-    TestAppContext, VisualTestContext, WindowHandle, point, px, size,
+    AppContext as _, Axis, Entity, EntityInputHandler as _, InputEvent as _, Modifiers,
+    MouseButton, ScrollDelta, TestAppContext, VisualTestContext, WindowHandle, point, px, size,
 };
 use serde_json::json;
 use std::sync::mpsc;
@@ -102,6 +102,228 @@ fn paint_root(handle: WindowHandle<Root>, cx: &mut TestAppContext) {
         .expect("test window remains open");
         cx.run_until_parked();
     }
+}
+
+fn episode_list_tree(count: usize, generation: &str, query: &str) -> Node {
+    let mut rows = vec![json!({"type": "vstack", "id": "controls", "padding": 16,
+        "children": [{"type": "input", "id": "episode-search", "text": query,
+                      "on-change": format!("search-{generation}")}]
+    })];
+    rows.extend((0..count).map(|i| json!({
+        "type": "vstack", "id": format!("episode-{i}"), "padding": 18, "gap": 10,
+        "children": [
+            {"type": "label", "text": format!("Episode {i}: {}", "A longer title that wraps. ".repeat(1 + i % 4)), "font-size": 17},
+            {"type": "label", "text": "An episode description with two lines of notes.", "font-size": 13},
+            {"type": "button", "id": format!("play-{i}"), "on-click": format!("play-{generation}-{i}"),
+             "children": [
+                 {"type": "icon", "icon": "play", "size": 14},
+                 {"type": "progress", "value": 25, "width": 42, "accessibility-label": "25% played"},
+                 {"type": "label", "text": "45m"}
+             ]}
+        ]
+    })));
+    serde_json::from_value(json!({"type": "window", "children": [{
+        "type": "virtual-scroll", "id": "episodes", "width": 600, "height": 420,
+        "row-height": 160,
+        "scroll-to-item": 0, "children": rows
+    }]}))
+    .unwrap()
+}
+
+#[gpui_kit::test]
+async fn episode_scroller_virtualizes_rich_controls_and_retains_search(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        syntax::init(cx);
+    });
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(640.), px(480.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    event_tx
+        .send(HostEvent::tree(
+            episode_list_tree(2000, "old", ""),
+            None,
+            vec![],
+        ))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let view = production_view(handle, cx);
+    let input_id = view.read_with(cx, |view, _| view.test_input_state_id("episode-search"));
+    assert!(input_id.is_some());
+    assert!(
+        view.read_with(cx, |view, _| view.test_virtual_scroll_counts("episodes").3) > 200_000.,
+        "the scrollbar must account for all 2,000 rows immediately"
+    );
+    let renders = view.read_with(cx, |view, _| view.test_virtual_scroll_counts("episodes").1);
+    assert!(
+        renders < 200,
+        "initial layout rendered {renders} rows out of 2,000"
+    );
+    drain(&cmd_rx);
+
+    cx.update_window(handle.into(), |_, window, cx| {
+        // Compound play controls must keep their icon, progress, and duration.
+        assert!(window.find("play-0").bounds().size.width > px(80.));
+        window.click("episode-search", cx);
+        window.input("Ada", cx);
+        assert_eq!(window.find("episode-search").value(), Some("Ada"));
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(callback_pairs(&drain(&cmd_rx)).contains(&("search-old".into(), Some(json!("Ada")))));
+
+    let started = std::time::Instant::now();
+    for _ in 0..12 {
+        cx.update_window(handle.into(), |_, window, cx| {
+            let position = point(px(300.), px(250.));
+            window.dispatch_event(
+                gpui_kit::MouseMoveEvent {
+                    position,
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.dispatch_event(
+                gpui_kit::ScrollWheelEvent {
+                    position,
+                    delta: ScrollDelta::Pixels(point(px(0.), px(-80.))),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+        })
+        .unwrap();
+        paint_root(handle, cx);
+    }
+    let rendered =
+        view.read_with(cx, |view, _| view.test_virtual_scroll_counts("episodes").1) - renders;
+    eprintln!(
+        "2,000 episodes, 12 scroll events: {:?}; {rendered} row renders",
+        started.elapsed()
+    );
+    assert!(
+        rendered < 1000,
+        "scrolling must only realize nearby rows: {rendered}"
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view.test_virtual_scroll_counts("episodes").0),
+        1
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view.test_input_state_id("episode-search")),
+        input_id
+    );
+
+    cx.update_window(handle.into(), |_, window, _| {
+        assert!(
+            window.try_find("episode-search").is_none(),
+            "the search row must actually scroll out of view"
+        );
+    })
+    .unwrap();
+
+    // A fast gesture must traverse the corresponding distance, not skip all
+    // unmeasured rows to the final episodes because their height was zero.
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.scroll(
+            "episodes",
+            ScrollDelta::Pixels(point(px(0.), px(-1600.))),
+            cx,
+        );
+    })
+    .unwrap();
+    paint_root(handle, cx);
+    let top = view.read_with(cx, |view, _| view.test_virtual_scroll_counts("episodes").2);
+    assert!(
+        (8..50).contains(&top),
+        "fast scroll landed at row {top} of 2,000"
+    );
+
+    // Playback-style snapshots update progress without moving the viewport.
+    let mut playback = episode_list_tree(2000, "playing", "Ada");
+    playback.children[0].width = Some(420.);
+    playback.children[0].children[top].children[2].children[1].value = Some(json!(40));
+    event_tx
+        .send(HostEvent::tree(playback, None, vec![]))
+        .await
+        .unwrap();
+    paint_root(handle, cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.test_virtual_scroll_counts("episodes").2),
+        top
+    );
+    assert!(
+        view.read_with(cx, |view, _| view.test_virtual_scroll_counts("episodes").3) > 200_000.,
+        "resizing must not discard offscreen height estimates"
+    );
+
+    // A filtered replacement resets the row list and returns to the top.
+    event_tx
+        .send(HostEvent::tree(
+            episode_list_tree(40, "current", "Ada"),
+            None,
+            vec![],
+        ))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.test_input_state_id("episode-search")),
+        input_id
+    );
+    drain(&cmd_rx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        assert_eq!(window.find("episode-search").value(), Some("Ada"));
+        window.click("play-0", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let commands = drain(&cmd_rx);
+    assert_eq!(
+        callback_pairs(&commands),
+        vec![("play-current-0".into(), None)]
+    );
+    let sequence = callback_sequence(&commands).expect("scroller buttons use the callback queue");
+
+    // A second click must wait for the first response and resolve its new ID.
+    cx.update_window(handle.into(), |_, window, cx| window.click("play-0", cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert!(callback_pairs(&drain(&cmd_rx)).is_empty());
+    event_tx
+        .send(HostEvent::tree(
+            episode_list_tree(40, "fresh", "Ada"),
+            Some(sequence),
+            vec![],
+        ))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        callback_pairs(&drain(&cmd_rx)),
+        vec![("play-fresh-0".into(), None)]
+    );
+
+    // Removing the scroller must release its retained native search state.
+    event_tx
+        .send(HostEvent::tree(
+            serde_json::from_value(json!({"type": "window"})).unwrap(),
+            None,
+            vec![],
+        ))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert!(
+        view.read_with(cx, |view, _| view.test_input_state_id("episode-search"))
+            .is_none()
+    );
 }
 
 #[gpui_kit::test]

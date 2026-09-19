@@ -25,6 +25,7 @@ use gpui_component::{
     group_box::{GroupBox, GroupBoxVariants as _},
     h_flex,
     hover_card::HoverCard,
+    input::{Input, InputState},
     kbd::Kbd,
     link::Link,
     menu::{PopupMenu, PopupMenuItem},
@@ -557,7 +558,9 @@ impl QueuedAction {
         if let Self::ScrollerLabelClick { key, label } = self {
             let mut callback = None;
             walk_nodes(tree, "root", &mut |node, path| {
-                if node.kind == "message-scroller" && node_key(node, path) == *key {
+                if matches!(node.kind.as_str(), "message-scroller" | "virtual-scroll")
+                    && node_key(node, path) == *key
+                {
                     walk_nodes(node, path, &mut |child, _| {
                         if callback.is_none()
                             && child.kind == "label"
@@ -909,6 +912,21 @@ pub(crate) struct ScrollerPaintContext {
     pub key: String,
     pub emit: ActionEmitter,
     pub follow: Option<ScrollerFollow>,
+    pub inputs: HashMap<String, gpui::Entity<InputState>>,
+}
+
+/// Cache only live text controls when a new row tree arrives. Native scrolling
+/// must not walk every row to rediscover them on each frame.
+pub(crate) fn scroller_inputs(children: &[Node]) -> Vec<Node> {
+    let mut inputs = Vec::new();
+    for child in children {
+        walk_nodes(child, "", &mut |node, _| {
+            if node.kind == "input" && node.id.as_ref().is_some_and(|id| !id.is_empty()) {
+                inputs.push(node.clone());
+            }
+        });
+    }
+    inputs
 }
 
 pub(crate) fn paint_following_scroller_tree(
@@ -999,13 +1017,50 @@ fn paint_static_contents(
         );
     }
     match node.kind.as_str() {
+        "input" if scroller.is_some() => {
+            let state = node.id.as_ref().and_then(|id| scroller?.inputs.get(id));
+            match state {
+                Some(state) => chart_layout(
+                    mapping::apply_input_chrome(
+                        Input::new(state).id(SharedString::from(node_key(node, path))),
+                        node,
+                    ),
+                    node,
+                )
+                .into_any_element(),
+                None => chart_layout(div().child(node.text.clone().unwrap_or_default()), node)
+                    .into_any_element(),
+            }
+        }
         "button" => {
-            let mut button = Button::new(SharedString::from(path.to_string()));
+            let button_key = if scroller.is_some() {
+                node_key(node, path)
+            } else {
+                path.to_string()
+            };
+            let mut button = Button::new(SharedString::from(button_key));
             if let Some(label) = mapping::jump_button_visible_label(node) {
                 button = button.label(label.to_string());
             }
             button = apply_button_chrome(button, node, cx);
-            if let (Some(id), Some(tx)) = (node.on_click.clone(), cmd_tx) {
+            button = button.children(node.children.iter().enumerate().map(|(index, child)| {
+                paint_following_static_tree(
+                    child,
+                    &static_child_path(path, index),
+                    cmd_tx,
+                    cx,
+                    scroller,
+                )
+            }));
+            if let Some(context) = scroller
+                && let Some(key) = node.id.clone().filter(|id| !id.is_empty())
+                && node.on_click.is_some()
+            {
+                let emit = context.emit.clone();
+                button = button.on_click(move |_, _, cx| {
+                    emit(QueuedAction::ButtonClick { key: key.clone() }, cx);
+                });
+            } else if let (Some(id), Some(tx)) = (node.on_click.clone(), cmd_tx) {
                 let tx = tx.clone();
                 button = button.on_click(move |_, _, _| {
                     let _ = tx.send(Cmd::Callback {
@@ -1015,7 +1070,7 @@ fn paint_static_contents(
                     });
                 });
             }
-            button.into_any_element()
+            chart_layout(button, node).into_any_element()
         }
         "hstack" => chart_layout(h_flex().gap(px(node.gap.unwrap_or(8.))), node)
             .children(node.children.iter().enumerate().map(|(child_ix, child)| {

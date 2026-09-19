@@ -48,7 +48,7 @@ use gpui_component::{
     radio::{Radio, RadioGroup},
     rating::Rating,
     resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
-    scroll::ScrollableElement as _,
+    scroll::{ScrollableElement as _, ScrollableMask},
     searchable_list::{SearchableListDelegate, SearchableListItem},
     select::{SearchableVec, Select, SelectEvent, SelectGroup, SelectItem, SelectState},
     separator::Separator,
@@ -291,6 +291,22 @@ struct MessageScrollerSlot {
     _observe: Subscription,
 }
 
+struct VirtualScrollSlot {
+    state: gpui::ListState,
+    seeded_width: Rc<Cell<Option<Pixels>>>,
+    items: Rc<RefCell<Vec<Node>>>,
+    inputs: Vec<Node>,
+    ids: Vec<String>,
+    layouts: Vec<Node>,
+    tree_revision: u64,
+    row_height: f32,
+    last_scroll: Option<chat::ScrollerScrollToken>,
+    #[cfg(test)]
+    sync_count: usize,
+    #[cfg(test)]
+    row_render_count: Rc<Cell<usize>>,
+}
+
 struct ListSlot {
     state: Entity<ListState<RowListDelegate>>,
     fingerprint: u64,
@@ -503,6 +519,7 @@ pub struct RootView {
     textareas: HashMap<String, TextControlSlot<TextareaState>>,
     vlists: HashMap<String, Entity<extra::VirtualListView>>,
     scrollers: HashMap<String, MessageScrollerSlot>,
+    virtual_scrolls: HashMap<String, VirtualScrollSlot>,
     docks: HashMap<String, DockSlot>,
     nav_stacks: HashMap<String, NavStackSlot>,
     resizables: HashMap<String, Entity<ResizableState>>,
@@ -532,6 +549,7 @@ pub struct RootView {
     used_textareas: HashSet<String>,
     used_vlists: HashSet<String>,
     used_scrollers: HashSet<String>,
+    used_virtual_scrolls: HashSet<String>,
     used_docks: HashSet<String>,
     used_nav_stacks: HashSet<String>,
     native_menu_open: HashMap<String, bool>,
@@ -683,6 +701,22 @@ impl RootView {
     }
 
     #[cfg(test)]
+    pub(crate) fn test_virtual_scroll_counts(&self, key: &str) -> (usize, usize, usize, f32) {
+        let slot = &self.virtual_scrolls[key];
+        (
+            slot.sync_count,
+            slot.row_render_count.get(),
+            slot.state.logical_scroll_top().item_ix,
+            f32::from(slot.state.max_offset_for_scrollbar().y),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_input_state_id(&self, key: &str) -> Option<EntityId> {
+        self.inputs.get(key).map(|slot| slot.state.entity_id())
+    }
+
+    #[cfg(test)]
     pub fn new(
         nrepl_port: u16,
         cmd_tx: mpsc::Sender<Cmd>,
@@ -823,6 +857,7 @@ impl RootView {
             textareas: HashMap::new(),
             vlists: HashMap::new(),
             scrollers: HashMap::new(),
+            virtual_scrolls: HashMap::new(),
             docks: HashMap::new(),
             nav_stacks: HashMap::new(),
             resizables: HashMap::new(),
@@ -852,6 +887,7 @@ impl RootView {
             used_textareas: HashSet::new(),
             used_vlists: HashSet::new(),
             used_scrollers: HashSet::new(),
+            used_virtual_scrolls: HashSet::new(),
             used_docks: HashSet::new(),
             used_nav_stacks: HashSet::new(),
             native_menu_open: HashMap::new(),
@@ -1870,6 +1906,7 @@ impl RootView {
             "date-picker" => self.render_date_picker(node, &key, window, cx),
             "editor" => self.render_editor(node, &key, window, cx),
             "virtual-list" => self.render_virtual_list(node, &key, window, cx),
+            "virtual-scroll" => self.render_virtual_scroll(node, path, &key, window, cx),
             "chart" => {
                 let default_h = extra::chart_viewport(node).1;
                 viewport_sized(extra::paint_chart(node, &key, cx), node, default_h, cx)
@@ -5145,6 +5182,7 @@ impl RootView {
             state: slot.state.clone(),
         });
         let scroller_context = overlay::ScrollerPaintContext {
+            inputs: HashMap::new(),
             key: key.to_string(),
             emit: Self::action_emitter(cx),
             follow,
@@ -5664,6 +5702,189 @@ impl RootView {
         viewport_sized(group, node, 240.0, cx)
     }
 
+    fn render_virtual_scroll(
+        &mut self,
+        node: &Node,
+        path: &str,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.used_virtual_scrolls.insert(key.to_string());
+        let row_height = node
+            .row_height
+            .filter(|h| h.is_finite() && *h > 0.)
+            .unwrap_or(160.);
+        if self
+            .virtual_scrolls
+            .get(key)
+            .is_none_or(|slot| slot.tree_revision != self.tree_revision)
+        {
+            let ids = node
+                .children
+                .iter()
+                .enumerate()
+                .map(|(i, row)| chat::scroller_item_id(row, i))
+                .collect::<Vec<_>>();
+            let layouts = node
+                .children
+                .iter()
+                .map(chat::scroller_layout)
+                .collect::<Vec<_>>();
+            let inputs = overlay::scroller_inputs(&node.children);
+            if let Some(slot) = self.virtual_scrolls.get_mut(key) {
+                if slot.ids != ids || slot.row_height != row_height {
+                    slot.state
+                        .reset_with_uniform_height(ids.len(), px(row_height));
+                    slot.last_scroll = None;
+                } else {
+                    for (i, (previous, next)) in slot.layouts.iter().zip(&layouts).enumerate() {
+                        if previous != next {
+                            slot.state.remeasure_items(i..i + 1);
+                        }
+                    }
+                }
+                *slot.items.borrow_mut() = node.children.clone();
+                slot.inputs = inputs;
+                slot.ids = ids;
+                slot.layouts = layouts;
+                slot.tree_revision = self.tree_revision;
+                slot.row_height = row_height;
+                #[cfg(test)]
+                {
+                    slot.sync_count += 1;
+                }
+            } else {
+                self.virtual_scrolls.insert(
+                    key.to_string(),
+                    VirtualScrollSlot {
+                        // Unknown rows otherwise have zero height, so a fast wheel
+                        // event can skip straight to the end. Real layout replaces
+                        // this estimate as each row enters the viewport.
+                        state: gpui::ListState::new(ids.len(), gpui::ListAlignment::Top, px(400.))
+                            .with_uniform_item_height(px(row_height)),
+                        seeded_width: Rc::new(Cell::new(None)),
+                        items: Rc::new(RefCell::new(node.children.clone())),
+                        inputs,
+                        ids,
+                        layouts,
+                        row_height,
+                        tree_revision: self.tree_revision,
+                        last_scroll: None,
+                        #[cfg(test)]
+                        sync_count: 1,
+                        #[cfg(test)]
+                        row_render_count: Rc::new(Cell::new(0)),
+                    },
+                );
+            }
+        }
+        let slot = self
+            .virtual_scrolls
+            .get_mut(key)
+            .expect("virtual scroll slot");
+        let request =
+            chat::scroller_scroll_request(node.scroll_to_end, node.scroll_to_item.as_ref());
+        let generation = chat::scroller_scroll_generation(node.scroll_generation.as_ref());
+        if let Some((apply, token)) = chat::scroller_scroll_plan(
+            slot.last_scroll.as_ref(),
+            request.as_ref(),
+            generation.as_deref(),
+            &slot.ids,
+        ) {
+            match apply {
+                chat::ScrollerScrollApply::Item(index) => slot.state.scroll_to(gpui::ListOffset {
+                    item_ix: index,
+                    offset_in_item: px(0.),
+                }),
+                chat::ScrollerScrollApply::End => slot.state.scroll_to(gpui::ListOffset {
+                    item_ix: slot.ids.len(),
+                    offset_in_item: px(0.),
+                }),
+            }
+            slot.last_scroll = Some(token);
+        }
+        let input_nodes = slot.inputs.clone();
+        let state = slot.state.clone();
+        let seeded_width = slot.seeded_width.clone();
+        let items = slot.items.clone();
+        #[cfg(test)]
+        let render_count = slot.row_render_count.clone();
+        let inputs = input_nodes
+            .iter()
+            .map(|input| {
+                let id = input.id.as_ref().expect("identified input");
+                (id.clone(), self.input_slot(id, input, window, cx))
+            })
+            .collect();
+        let context = overlay::ScrollerPaintContext {
+            key: key.to_string(),
+            emit: Self::action_emitter(cx),
+            follow: None,
+            inputs,
+        };
+        let row_path = path.to_string();
+        let cmd_tx = self.cmd_tx.clone();
+        let gap = node.gap.unwrap_or(0.);
+        let list = gpui::list(state.clone(), move |index, _, cx| {
+            #[cfg(test)]
+            render_count.set(render_count.get() + 1);
+            let rows = items.borrow();
+            let Some(row) = rows.get(index) else {
+                return div().into_any_element();
+            };
+            div()
+                .w_full()
+                .min_w_0()
+                .when(index + 1 < rows.len(), |el| el.pb(px(gap)))
+                .child(overlay::paint_following_scroller_tree(
+                    row,
+                    &format!("{row_path}.{index}"),
+                    &cmd_tx,
+                    cx,
+                    &context,
+                ))
+                .into_any_element()
+        })
+        .size_full()
+        .min_h_0();
+        let viewport = div()
+            .id(eid(key))
+            .relative()
+            .size_full()
+            .min_h_0()
+            .test_support()
+            .child(apply_kit_visual_style(list, node, cx))
+            // GPUI 0.3.5 clears even explicit size hints in List::prepaint
+            // on first layout and width changes. Seed after that prepaint,
+            // retaining the real sizes of rows it just measured. This also
+            // gives the scrollbar below the full extent on its first frame.
+            .child({
+                let state = state.clone();
+                let view = cx.weak_entity();
+                canvas(
+                    move |bounds, window, _| {
+                        if seeded_width.get() != Some(bounds.size.width) {
+                            seeded_width.set(Some(bounds.size.width));
+                            state.clone().with_uniform_item_height(px(row_height));
+                            let view = view.clone();
+                            window.on_next_frame(move |_, cx| {
+                                let _ = view.update(cx, |_, cx| cx.notify());
+                            });
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full()
+            })
+            .when(node.scrollbar != Some(false), |el| {
+                el.vertical_scrollbar(&state)
+            })
+            .child(ScrollableMask::new(Axis::Vertical, &state).id(eid(key)));
+        viewport_box_sized(viewport, node, 400.)
+    }
+
     fn render_scroll(
         &mut self,
         node: &Node,
@@ -5789,6 +6010,7 @@ impl Render for RootView {
         self.used_textareas.clear();
         self.used_vlists.clear();
         self.used_scrollers.clear();
+        self.used_virtual_scrolls.clear();
         self.used_docks.clear();
         self.used_nav_stacks.clear();
         self.used_resizables.clear();
@@ -5843,6 +6065,9 @@ impl Render for RootView {
         self.vlists.retain(|key, _| used_vlists.contains(key));
         let used_scrollers = std::mem::take(&mut self.used_scrollers);
         self.scrollers.retain(|key, _| used_scrollers.contains(key));
+        let used_virtual_scrolls = std::mem::take(&mut self.used_virtual_scrolls);
+        self.virtual_scrolls
+            .retain(|key, _| used_virtual_scrolls.contains(key));
         let used_docks = std::mem::take(&mut self.used_docks);
         self.docks.retain(|key, _| used_docks.contains(key));
         let used_nav_stacks = std::mem::take(&mut self.used_nav_stacks);

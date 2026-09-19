@@ -807,6 +807,26 @@
   (let [[style children] (split-style-children args)]
     (assoc style :type :scroll :children (flatten-children children))))
 
+(defn virtual-scroll
+  "Variable-height scroll container that lays out only visible rows and a
+  small buffer. Each direct child is a row and needs a stable `:id`.
+  `:row-height` is an estimate in pixels (default 160), replaced by the
+  actual measured height as rows become visible. It keeps scrollbar and
+  fast wheel movement proportional without laying out the entire list.
+
+  Fills leftover height; `:height` sets a fixed viewport. Supports `:padding`,
+  `:gap`, and `:scrollbar false`. `:scroll-to-item` accepts a row id or index;
+  `:scroll-generation` reapplies that target after manual scrolling.
+  Changing the row identities resets the list; paint-only updates keep it.
+
+  Rows support stacks, labels, compound buttons, and other static widgets.
+  Give buttons and `ui/input` fields stable ids. Inputs retain their native
+  state offscreen; buttons use the current callback registry. Other stateful
+  widgets (list, data-table, editor) are not supported inside rows."
+  [& args]
+  (let [[style children] (split-style-children args)]
+    (assoc style :type :virtual-scroll :children (flatten-children children))))
+
 (defn input
   "Single-line text input rendered with GPUI Kit's Input.
 
