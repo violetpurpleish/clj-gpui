@@ -654,10 +654,22 @@ impl RootView {
         self.dates.get(key).map(|slot| slot.state.entity_id())
     }
 
+    #[cfg(test)]
     pub fn new(
         nrepl_port: u16,
         cmd_tx: mpsc::Sender<Cmd>,
         event_rx: async_channel::Receiver<HostEvent>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_with_initial_events(nrepl_port, cmd_tx, event_rx, Vec::new(), window, cx)
+    }
+
+    fn new_with_initial_events(
+        nrepl_port: u16,
+        cmd_tx: mpsc::Sender<Cmd>,
+        event_rx: async_channel::Receiver<HostEvent>,
+        initial_events: Vec<HostEvent>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -680,9 +692,17 @@ impl RootView {
             }
             this.handle_escape(window, cx);
         });
-        let _ = cmd_tx.send(Cmd::Render);
+        let request_initial_render = initial_events.is_empty();
+        let mut initial_events = initial_events.into_iter();
         cx.spawn(async move |this, cx| {
-            while let Ok(event) = event_rx.recv().await {
+            loop {
+                let event = match initial_events.next() {
+                    Some(event) => event,
+                    None => match event_rx.recv().await {
+                        Ok(event) => event,
+                        Err(_) => break,
+                    },
+                };
                 let _ = this.update(cx, |view, cx| {
                     match event {
                         HostEvent::Ready { nrepl_port, .. } => {
@@ -738,6 +758,9 @@ impl RootView {
         })
         .detach();
 
+        if request_initial_render {
+            let _ = cmd_tx.send(Cmd::Render);
+        }
         Self {
             tree: None,
             status: format!("nREPL 127.0.0.1:{nrepl_port} · loading Clojure UI"),
@@ -7091,6 +7114,41 @@ fn quit_host(cx: &mut App) {
     std::process::exit(0);
 }
 
+const DEFAULT_WINDOW_SIZE: (f32, f32) = (580., 820.);
+
+fn requested_window_size(tree: &Node) -> Option<(f32, f32)> {
+    Some((
+        tree.window_width.or(tree.width)?,
+        tree.window_height.or(tree.height)?,
+    ))
+}
+
+fn initial_window_events(
+    cmd_tx: &mpsc::Sender<Cmd>,
+    event_rx: &async_channel::Receiver<HostEvent>,
+) -> (Vec<HostEvent>, (f32, f32)) {
+    let _ = cmd_tx.send(Cmd::Render);
+    let mut events = Vec::new();
+    let mut window_size = DEFAULT_WINDOW_SIZE;
+
+    while let Ok(event) = event_rx.recv_blocking() {
+        let complete = match &event {
+            HostEvent::Tree(tree, _, _) => {
+                window_size = requested_window_size(tree).unwrap_or(DEFAULT_WINDOW_SIZE);
+                true
+            }
+            HostEvent::Error(_) => true,
+            _ => false,
+        };
+        events.push(event);
+        if complete {
+            break;
+        }
+    }
+
+    (events, window_size)
+}
+
 pub fn open_window(
     nrepl_port: u16,
     cmd_tx: mpsc::Sender<Cmd>,
@@ -7109,7 +7167,11 @@ pub fn open_window(
     })
     .detach();
 
-    let bounds = Bounds::centered(None, size(px(580.), px(820.)), cx);
+    // Fetch the first tree before creating the native window so its requested
+    // size is centered directly. Resizing a centered fallback window later
+    // preserves its old origin and makes wider apps extend off the right edge.
+    let (initial_events, (width, height)) = initial_window_events(&cmd_tx, &event_rx);
+    let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -7120,7 +7182,16 @@ pub fn open_window(
             ..Default::default()
         },
         |window, cx| {
-            let view = cx.new(|cx| RootView::new(nrepl_port, cmd_tx, event_rx, window, cx));
+            let view = cx.new(|cx| {
+                RootView::new_with_initial_events(
+                    nrepl_port,
+                    cmd_tx,
+                    event_rx,
+                    initial_events,
+                    window,
+                    cx,
+                )
+            });
             let weak = view.downgrade();
             cx.on_action(move |action: &action_bridge::CljAction, app| {
                 let _ = weak.update(app, |this, _cx| {
@@ -7137,6 +7208,68 @@ pub fn open_window(
     )
     .unwrap();
     cx.activate(true);
+}
+
+#[cfg(test)]
+mod window_startup_tests {
+    use super::{DEFAULT_WINDOW_SIZE, initial_window_events, requested_window_size};
+    use crate::protocol::{Cmd, HostEvent, Node};
+    use std::sync::mpsc;
+
+    #[test]
+    fn requested_size_prefers_native_window_dimensions() {
+        let tree = Node {
+            window_width: Some(1040.),
+            window_height: Some(880.),
+            width: Some(400.),
+            height: Some(300.),
+            ..Node::default()
+        };
+
+        assert_eq!(requested_window_size(&tree), Some((1040., 880.)));
+    }
+
+    #[test]
+    fn initial_tree_size_is_available_before_window_creation() {
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let (event_tx, event_rx) = async_channel::unbounded();
+        event_tx
+            .send_blocking(HostEvent::Ready {
+                nrepl_port: 7331,
+                app: "widgets/app".into(),
+            })
+            .unwrap();
+        event_tx
+            .send_blocking(HostEvent::Tree(
+                Node {
+                    window_width: Some(1040.),
+                    window_height: Some(880.),
+                    ..Node::default()
+                },
+                None,
+                vec![],
+            ))
+            .unwrap();
+
+        let (events, size) = initial_window_events(&cmd_tx, &event_rx);
+
+        assert!(matches!(cmd_rx.recv().unwrap(), Cmd::Render));
+        assert_eq!(events.len(), 2);
+        assert_eq!(size, (1040., 880.));
+    }
+
+    #[test]
+    fn missing_initial_dimensions_keep_the_fallback_size() {
+        let (cmd_tx, _cmd_rx) = mpsc::channel();
+        let (event_tx, event_rx) = async_channel::unbounded();
+        event_tx
+            .send_blocking(HostEvent::Tree(Node::default(), None, vec![]))
+            .unwrap();
+
+        let (_, size) = initial_window_events(&cmd_tx, &event_rx);
+
+        assert_eq!(size, DEFAULT_WINDOW_SIZE);
+    }
 }
 
 #[cfg(test)]
