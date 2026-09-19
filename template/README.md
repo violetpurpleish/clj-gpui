@@ -4,7 +4,7 @@ Copy this directory to start a native GPUI app driven by JVM Clojure.
 
 ## Run
 
-From this directory (next to the library checkout):
+From this directory (clj-gpui needs to be in a sibling directory unless you use a git dependency):
 
 ```bash
 clj -M:dev
@@ -16,14 +16,12 @@ Edit `src/my/app.clj` and save. The window rerenders; `defonce` / `r/atom` state
 
 ## Git dependency
 
-When you are not sitting next to this checkout, replace the local root in `deps.edn`:
+When you do not have clj-gpui checked out in a sibling directory, replace the local root in `deps.edn`:
 
 ```clojure
-{:deps {clj-gpui/clj-gpui {:git/url "https://github.com/YOUR/clj-gpui.git"
+{:deps {clj-gpui/clj-gpui {:git/url "https://github.com/violetpurpleish/clj-gpui.git"
                            :git/sha "REPLACE_WITH_SHA"}}}
 ```
-
-Use the git URL of the library you actually cloned. There is no Clojars release yet.
 
 You can also point at a built host binary with `CLJ_GPUI_BIN`, or at a library checkout with `CLJ_GPUI_ROOT`.
 
