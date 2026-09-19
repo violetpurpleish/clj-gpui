@@ -88,7 +88,7 @@ fn main() {
     });
     assert!(matches!(cmd_rx.recv().unwrap(), protocol::Cmd::Render));
     event_tx
-        .send_blocking(protocol::HostEvent::Tree(tree, None, vec![]))
+        .send_blocking(protocol::HostEvent::tree(tree, None, vec![]))
         .unwrap();
     app.run_until_parked();
 

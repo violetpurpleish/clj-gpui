@@ -712,7 +712,7 @@ impl RootView {
                         HostEvent::Tree(tree, seq, themes) => {
                             catalog::install_clojure_sets(themes);
                             overlay::acknowledge_dialog_tree(&mut view.dialog_keys, &tree);
-                            view.tree = Some(tree);
+                            view.tree = Some(*tree);
                             view.tree_seq = seq;
                             view.callback_queue.tree_installed(seq);
                             view.flush_callback_queue();
@@ -1031,10 +1031,8 @@ impl RootView {
         let key = action.slot.clone();
         let item_path = action.item_path.clone();
         let is_command = self.commands.contains_key(&key);
-        if is_command {
-            if let Some(slot) = self.commands.get_mut(&key) {
-                slot.pending_select = Some(item_path.clone());
-            }
+        if is_command && let Some(slot) = self.commands.get_mut(&key) {
+            slot.pending_select = Some(item_path.clone());
         }
         self.callback_queue
             .push(overlay::QueuedAction::CljSelect { key, item_path });
@@ -1386,32 +1384,30 @@ impl RootView {
         let scale = slider_effective_scale(node, lo, hi);
         let value = slider_wanted_value(node, lo, hi);
 
-        if let Some(slot) = self.sliders.get_mut(key) {
-            if (slot.min - lo).abs() <= f32::EPSILON
-                && (slot.max - hi).abs() <= f32::EPSILON
-                && (slot.step - step).abs() <= f32::EPSILON
-                && slot.scale == scale
-            {
-                let id_changed =
-                    slot.on_change != node.on_change || slot.on_release != node.on_release;
-                slot.on_change = node.on_change.clone();
-                slot.on_release = node.on_release.clone();
-                let refresh = id_changed && slot.coalesce.on_ids_refreshed();
-                let current = slot.state.read(cx).value();
-                // `set_value` notifies without emitting Change or Release, so
-                // applying Clojure's current value cannot loop. Step is drag
-                // granularity only; a 40→42 update with step 5 must still land
-                // on 42.
-                if slider_value_changed(current, value) {
-                    slot.state.update(cx, |s, cx| {
-                        s.set_value(value, window, cx);
-                    });
-                }
-                if refresh {
-                    Self::schedule_slider_event_flush(key.to_string(), window, cx);
-                }
-                return slot.state.clone();
+        if let Some(slot) = self.sliders.get_mut(key)
+            && (slot.min - lo).abs() <= f32::EPSILON
+            && (slot.max - hi).abs() <= f32::EPSILON
+            && (slot.step - step).abs() <= f32::EPSILON
+            && slot.scale == scale
+        {
+            let id_changed = slot.on_change != node.on_change || slot.on_release != node.on_release;
+            slot.on_change = node.on_change.clone();
+            slot.on_release = node.on_release.clone();
+            let refresh = id_changed && slot.coalesce.on_ids_refreshed();
+            let current = slot.state.read(cx).value();
+            // `set_value` notifies without emitting Change or Release, so
+            // applying Clojure's current value cannot loop. Step is drag
+            // granularity only; a 40→42 update with step 5 must still land
+            // on 42.
+            if slider_value_changed(current, value) {
+                slot.state.update(cx, |s, cx| {
+                    s.set_value(value, window, cx);
+                });
             }
+            if refresh {
+                Self::schedule_slider_event_flush(key.to_string(), window, cx);
+            }
+            return slot.state.clone();
         }
 
         let mut builder = SliderState::new().min(lo).max(hi).step(step);
@@ -1630,15 +1626,15 @@ impl RootView {
                     }
                     let cmd_tx = self.cmd_tx.clone();
                     wrap = wrap.on_click(move |event, _, _| {
-                        if event.click_count() >= 2 {
-                            if let Some(id) = on_double.clone() {
-                                let _ = cmd_tx.send(Cmd::Callback {
-                                    id,
-                                    value: None,
-                                    seq: None,
-                                });
-                                return;
-                            }
+                        if event.click_count() >= 2
+                            && let Some(id) = on_double.clone()
+                        {
+                            let _ = cmd_tx.send(Cmd::Callback {
+                                id,
+                                value: None,
+                                seq: None,
+                            });
+                            return;
                         }
                         if let Some(id) = on_click.clone() {
                             let _ = cmd_tx.send(Cmd::Callback {
@@ -1970,7 +1966,8 @@ impl RootView {
                 let selected: Vec<String> = ids
                     .iter()
                     .zip(checks.iter())
-                    .filter_map(|(id, on)| on.then(|| id.clone()))
+                    .filter(|(_, on)| **on)
+                    .map(|(id, _)| id.clone())
                     .collect();
                 let _ = cmd_tx.send(Cmd::Callback {
                     id: callback_id.clone(),
@@ -2780,22 +2777,21 @@ impl RootView {
         let mut crumb = Breadcrumb::new();
         for (ix, item) in items.iter().enumerate() {
             let mut entry = BreadcrumbItem::new(item.label_or_id()).disabled(item.disabled);
-            if ix != last {
-                if let Some(callback_id) = item.on_click.clone().or_else(|| node.on_change.clone())
-                {
-                    let id = item.id_or_label();
-                    let cmd_tx = self.cmd_tx.clone();
-                    if node.on_change.is_some() && item.on_click.is_none() {
-                        entry = entry.on_click(move |_, _, _| {
-                            let _ = cmd_tx.send(Cmd::Callback {
-                                id: callback_id.clone(),
-                                value: Some(json!(id.clone())),
-                                seq: None,
-                            });
+            if ix != last
+                && let Some(callback_id) = item.on_click.clone().or_else(|| node.on_change.clone())
+            {
+                let id = item.id_or_label();
+                let cmd_tx = self.cmd_tx.clone();
+                if node.on_change.is_some() && item.on_click.is_none() {
+                    entry = entry.on_click(move |_, _, _| {
+                        let _ = cmd_tx.send(Cmd::Callback {
+                            id: callback_id.clone(),
+                            value: Some(json!(id.clone())),
+                            seq: None,
                         });
-                    } else {
-                        entry = entry.on_click(self.click(callback_id));
-                    }
+                    });
+                } else {
+                    entry = entry.on_click(self.click(callback_id));
                 }
             }
             crumb = crumb.child(entry);
@@ -3209,7 +3205,7 @@ impl RootView {
             let key = key.to_string();
             let entity = cx.entity();
             cx.defer(move |app| {
-                let _ = entity.update(app, |this, _cx| {
+                entity.update(app, |this, _cx| {
                     if let Some(slot) = this.commands.get_mut(&key) {
                         slot.suppress_select = false;
                     }
@@ -3566,12 +3562,14 @@ impl RootView {
             state.update(cx, |table, _| {
                 apply_table_state_flags(table, node);
                 table.delegate_mut().sync_chrome(
-                    node.loading,
-                    node.has_more,
-                    load_more_threshold_rows(node),
-                    node.empty.clone(),
-                    node.on_load_more.clone(),
-                    node.on_sort.clone(),
+                    rows::TableChrome::new(
+                        node.loading,
+                        node.has_more,
+                        load_more_threshold_rows(node),
+                        node.empty.clone(),
+                        node.on_load_more.clone(),
+                        node.on_sort.clone(),
+                    ),
                     rows_changed || identity_changed || definition_changed,
                 );
             });
@@ -3589,12 +3587,14 @@ impl RootView {
                 .row_header(row_header);
             apply_table_state_flags(&mut table, node);
             table.delegate_mut().sync_chrome(
-                node.loading,
-                node.has_more,
-                load_more_threshold_rows(node),
-                node.empty.clone(),
-                node.on_load_more.clone(),
-                node.on_sort.clone(),
+                rows::TableChrome::new(
+                    node.loading,
+                    node.has_more,
+                    load_more_threshold_rows(node),
+                    node.empty.clone(),
+                    node.on_load_more.clone(),
+                    node.on_sort.clone(),
+                ),
                 true,
             );
             table
@@ -3709,9 +3709,11 @@ impl RootView {
             let table = state.read(cx);
             rows::table_selection_sync(
                 wanted,
-                table.delegate().selection_mode(),
-                table.selected_row(),
-                table.selected_cell(),
+                rows::CurrentTableSelection {
+                    mode: table.delegate().selection_mode(),
+                    row: table.selected_row(),
+                    cell: table.selected_cell(),
+                },
                 |id| table.delegate().index_of(id),
                 |id| table.delegate().col_index_of(id),
                 |id| table.delegate().contains_id(id),
@@ -3748,7 +3750,7 @@ impl RootView {
         let key = key.to_string();
         let entity = cx.entity();
         cx.defer(move |app| {
-            let _ = entity.update(app, |this, _cx| {
+            entity.update(app, |this, _cx| {
                 if let Some(slot) = this.tables.get_mut(&key) {
                     slot.suppress_select = false;
                 }
@@ -3785,7 +3787,7 @@ impl RootView {
         let payload = protocol::table_dump_payload(headers, dump_rows);
         let entity = cx.entity();
         cx.defer(move |app| {
-            let _ = entity.update(app, |this, _| {
+            entity.update(app, |this, _| {
                 this.emit_value(callback, payload);
             });
         });
@@ -4021,7 +4023,7 @@ impl RootView {
             // The active dialogs live on `Root`, but their rendered layer is
             // mounted by this view. Invalidate after Root has actually changed,
             // otherwise this view can cache a pre-open layer snapshot.
-            let _ = entity.update(cx, |_, cx| cx.notify());
+            entity.update(cx, |_, cx| cx.notify());
         });
     }
 
@@ -4061,7 +4063,7 @@ impl RootView {
                 (key, this.sheet_live.clone(), this.cmd_tx.clone(), placement)
             });
             let Some(key) = key else {
-                let _ = entity.update(cx, |_, cx| cx.notify());
+                entity.update(cx, |_, cx| cx.notify());
                 return;
             };
             window.open_sheet_at(placement, cx, move |sheet, _, cx| {
@@ -4085,7 +4087,7 @@ impl RootView {
                 let sheet = overlay::configure_sheet(sheet, &spec.node, children, footer);
                 overlay::bind_sheet_callbacks(sheet, &spec.node, cmd_tx.clone())
             });
-            let _ = entity.update(cx, |_, cx| cx.notify());
+            entity.update(cx, |_, cx| cx.notify());
         });
     }
 
@@ -4311,10 +4313,12 @@ impl RootView {
                     if !slot.as_number {
                         return;
                     }
-                    let mut bounds = Node::default();
-                    bounds.min = slot.number_min;
-                    bounds.max = slot.number_max;
-                    bounds.step = slot.number_step;
+                    let bounds = Node {
+                        min: slot.number_min,
+                        max: slot.number_max,
+                        step: slot.number_step,
+                        ..Node::default()
+                    };
                     let current = extra::number_from_input(&input.read(cx).value()).unwrap_or(0.0);
                     let next = extra::apply_number_step(
                         current,
@@ -4466,10 +4470,10 @@ impl RootView {
         } else if let Some(slot) = self.colors.get_mut(key) {
             slot.on_change = node.on_change.clone();
             let state = slot.state.clone();
-            if extra::color_sync(wanted, state.read(cx).value()) == extra::ColorSync::Set {
-                if let Some(color) = wanted {
-                    state.update(cx, |picker, cx| picker.set_value(color, window, cx));
-                }
+            if extra::color_sync(wanted, state.read(cx).value()) == extra::ColorSync::Set
+                && let Some(color) = wanted
+            {
+                state.update(cx, |picker, cx| picker.set_value(color, window, cx));
             }
             return state;
         }
@@ -5111,29 +5115,29 @@ impl RootView {
             .map(|item| format!("{}:{}", extra::dock_side(item), item.id_or_label()))
             .collect::<Vec<_>>()
             .join("|");
-        if let Some(slot) = self.docks.get_mut(key) {
-            if slot.fingerprint == fingerprint {
-                for item in node.collection() {
-                    let id = item.id_or_label();
-                    if let Some(panel) = slot.panels.get(&id) {
-                        let content =
-                            item.content
-                                .as_ref()
-                                .map(|n| *n.clone())
-                                .unwrap_or_else(|| Node {
-                                    kind: "label".into(),
-                                    text: item.label.clone(),
-                                    ..Node::default()
-                                });
-                        panel.update(cx, |p, cx| {
-                            p.title = item.label_or_id().into();
-                            *p.live.borrow_mut() = content;
-                            cx.notify();
+        if let Some(slot) = self.docks.get_mut(key)
+            && slot.fingerprint == fingerprint
+        {
+            for item in node.collection() {
+                let id = item.id_or_label();
+                if let Some(panel) = slot.panels.get(&id) {
+                    let content = item
+                        .content
+                        .as_ref()
+                        .map(|n| *n.clone())
+                        .unwrap_or_else(|| Node {
+                            kind: "label".into(),
+                            text: item.label.clone(),
+                            ..Node::default()
                         });
-                    }
+                    panel.update(cx, |p, cx| {
+                        p.title = item.label_or_id().into();
+                        *p.live.borrow_mut() = content;
+                        cx.notify();
+                    });
                 }
-                return viewport_sized(slot.area.clone(), node, 360.0, cx);
             }
+            return viewport_sized(slot.area.clone(), node, 360.0, cx);
         }
         let (area, _skin) =
             DockSkin::dock_area(SharedString::from(key.to_string()), None, window, cx);
@@ -5165,33 +5169,33 @@ impl RootView {
             panels.insert(id, panel);
         }
         area.update(cx, |dock, cx| {
-            if let Some(center) = by_side.remove("center") {
-                if !center.is_empty() {
-                    dock.set_center(dock_tabs(center, cx), window, cx);
-                }
+            if let Some(center) = by_side.remove("center")
+                && !center.is_empty()
+            {
+                dock.set_center(dock_tabs(center, cx), window, cx);
             }
-            if let Some(left) = by_side.remove("left") {
-                if !left.is_empty() {
-                    dock.set_dock(DockPlacement::Left, dock_tabs(left, cx), window, cx);
-                    let size = node.width.unwrap_or(240.0);
-                    dock.set_dock_size(DockPlacement::Left, px(size), window, cx);
-                }
+            if let Some(left) = by_side.remove("left")
+                && !left.is_empty()
+            {
+                dock.set_dock(DockPlacement::Left, dock_tabs(left, cx), window, cx);
+                let size = node.width.unwrap_or(240.0);
+                dock.set_dock_size(DockPlacement::Left, px(size), window, cx);
             }
-            if let Some(right) = by_side.remove("right") {
-                if !right.is_empty() {
-                    dock.set_dock(DockPlacement::Right, dock_tabs(right, cx), window, cx);
-                    dock.set_dock_size(DockPlacement::Right, px(240.), window, cx);
-                }
+            if let Some(right) = by_side.remove("right")
+                && !right.is_empty()
+            {
+                dock.set_dock(DockPlacement::Right, dock_tabs(right, cx), window, cx);
+                dock.set_dock_size(DockPlacement::Right, px(240.), window, cx);
             }
-            if let Some(bottom) = by_side.remove("bottom") {
-                if !bottom.is_empty() {
-                    let bottom_h = node
-                        .height
-                        .map(|h| (h * 0.34).clamp(64.0, 140.0))
-                        .unwrap_or(96.0);
-                    dock.set_dock(DockPlacement::Bottom, dock_tabs(bottom, cx), window, cx);
-                    dock.set_dock_size(DockPlacement::Bottom, px(bottom_h), window, cx);
-                }
+            if let Some(bottom) = by_side.remove("bottom")
+                && !bottom.is_empty()
+            {
+                let bottom_h = node
+                    .height
+                    .map(|h| (h * 0.34).clamp(64.0, 140.0))
+                    .unwrap_or(96.0);
+                dock.set_dock(DockPlacement::Bottom, dock_tabs(bottom, cx), window, cx);
+                dock.set_dock_size(DockPlacement::Bottom, px(bottom_h), window, cx);
             }
         });
         self.docks.insert(
@@ -5279,10 +5283,8 @@ impl RootView {
                         slot.last_replace.as_ref(),
                         token.as_deref(),
                     );
-                    if replace {
-                        if let Some(id) = resolved.last() {
-                            steps = vec![extra::NavTrailStep::Replace(id.clone())];
-                        }
+                    if replace && let Some(id) = resolved.last() {
+                        steps = vec![extra::NavTrailStep::Replace(id.clone())];
                     }
                     replacing = Some(replace);
                     steps
@@ -6802,15 +6804,15 @@ fn sync_tree_selection(
         SelectionSync::Keep => {
             // Collapsed/filtered ids stay selected in Clojure. If the native
             // highlight now points at a different visible row, clear it.
-            if let Some(id) = selected {
-                if rows::tree_visible_index(items, id).is_none() {
-                    let current_id = state
-                        .read(cx)
-                        .selected_entry()
-                        .map(|entry| entry.item().id.to_string());
-                    if current.is_some() && current_id.as_deref() != Some(id) {
-                        state.update(cx, |tree, cx| tree.set_selected_index(None, cx));
-                    }
+            if let Some(id) = selected
+                && rows::tree_visible_index(items, id).is_none()
+            {
+                let current_id = state
+                    .read(cx)
+                    .selected_entry()
+                    .map(|entry| entry.item().id.to_string());
+                if current.is_some() && current_id.as_deref() != Some(id) {
+                    state.update(cx, |tree, cx| tree.set_selected_index(None, cx));
                 }
             }
         }
@@ -7240,7 +7242,7 @@ mod window_startup_tests {
             })
             .unwrap();
         event_tx
-            .send_blocking(HostEvent::Tree(
+            .send_blocking(HostEvent::tree(
                 Node {
                     window_width: Some(1040.),
                     window_height: Some(880.),
@@ -7263,7 +7265,7 @@ mod window_startup_tests {
         let (cmd_tx, _cmd_rx) = mpsc::channel();
         let (event_tx, event_rx) = async_channel::unbounded();
         event_tx
-            .send_blocking(HostEvent::Tree(Node::default(), None, vec![]))
+            .send_blocking(HostEvent::tree(Node::default(), None, vec![]))
             .unwrap();
 
         let (_, size) = initial_window_events(&cmd_tx, &event_rx);

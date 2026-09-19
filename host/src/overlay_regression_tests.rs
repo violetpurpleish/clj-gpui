@@ -141,7 +141,7 @@ impl Fixture {
     fn tree(&self) -> (Node, Option<u64>) {
         loop {
             match self.host.event_rx.recv_blocking().unwrap() {
-                HostEvent::Tree(tree, seq, _) => return (tree, seq),
+                HostEvent::Tree(tree, seq, _) => return (*tree, seq),
                 HostEvent::Error(error) => panic!("bridge error: {error}"),
                 HostEvent::Ready { .. } => {}
                 other => panic!("unexpected event: {other:?}"),

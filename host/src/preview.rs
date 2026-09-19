@@ -23,7 +23,7 @@
 //!
 //! Failure is empty stdout / `None`. Never write the PNG to the host logs.
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gpui_kit as gpui;
 #[cfg(not(target_os = "macos"))]
 use std::io::Read;
@@ -129,7 +129,7 @@ pub fn capture_host_window(title: &str, window_id: Option<u32>) -> Option<String
         // the Metal layer while Evalight is in front.
         std::thread::sleep(std::time::Duration::from_millis(50));
         let image = preview_macos::capture_this_process(window_id)?;
-        return Some(STANDARD.encode(rgba_to_png(&image)?));
+        Some(STANDARD.encode(rgba_to_png(&image)?))
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -191,8 +191,7 @@ fn capture_pid(pid: u32, title: Option<&str>, window_id: Option<u32>) -> Option<
         #[cfg(target_os = "macos")]
         {
             let _ = (pid, title);
-            return preview_macos::capture_this_process(window_id)
-                .and_then(|image| rgba_to_png(&image));
+            preview_macos::capture_this_process(window_id).and_then(|image| rgba_to_png(&image))
         }
         #[cfg(not(target_os = "macos"))]
         {

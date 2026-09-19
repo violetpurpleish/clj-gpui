@@ -140,7 +140,7 @@ fn apply_callback_batch(
         .and_then(|value| parse_tree(&value))
     {
         Ok((node, themes)) => {
-            let _ = event_tx.send_blocking(HostEvent::Tree(node, seq, themes));
+            let _ = event_tx.send_blocking(HostEvent::tree(node, seq, themes));
         }
         Err(err) => {
             let _ = event_tx.send_blocking(HostEvent::Error(err.to_string()));
@@ -275,11 +275,10 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                             }
                         }
                         "response" | "" => {
-                            if let Some(id) = value.get("id").and_then(Value::as_u64) {
-                                if let Some(tx) = pending.lock().unwrap().remove(&id) {
+                            if let Some(id) = value.get("id").and_then(Value::as_u64)
+                                && let Some(tx) = pending.lock().unwrap().remove(&id) {
                                     let _ = tx.send(value);
                                 }
-                            }
                         }
                         other => {
                             eprintln!("[host] ignored Clojure message op={other}");
@@ -351,7 +350,7 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                                 let result =
                                     rpc(&writer, &pending, &next_id, json!({"op": "render"}))
                                         .and_then(|value| parse_tree(&value))
-                                        .map(|(node, themes)| HostEvent::Tree(node, None, themes));
+                                        .map(|(node, themes)| HostEvent::tree(node, None, themes));
                                 send_event(&event_tx, result);
                             }
                             Cmd::Callback { id, value, seq } => {
@@ -373,7 +372,7 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                                 let result =
                                     rpc(&writer, &pending, &next_id, json!({"op": "reload"}))
                                         .and_then(|value| parse_tree(&value))
-                                        .map(|(node, themes)| HostEvent::Tree(node, None, themes));
+                                        .map(|(node, themes)| HostEvent::tree(node, None, themes));
                                 send_event(&event_tx, result);
                             }
                         },
@@ -518,7 +517,7 @@ mod tree_error_tests {
             send_event(
                 &tx,
                 parse_tree(&json!({"ok": true, "tree": tree}))
-                    .map(|(node, themes)| HostEvent::Tree(node, None, themes)),
+                    .map(|(node, themes)| HostEvent::tree(node, None, themes)),
             );
             let HostEvent::Error(message) = rx.recv_blocking().unwrap() else {
                 panic!("invalid tree must send an error event");

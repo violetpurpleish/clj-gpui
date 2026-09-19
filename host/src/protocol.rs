@@ -146,7 +146,7 @@ pub enum NavItemWire {
     Named(String),
     Flag(bool),
     Cases(Vec<NavItemCase>),
-    Spec(NavItemSpec),
+    Spec(Box<NavItemSpec>),
 }
 
 pub const PROTOCOL_VERSION: u64 = 11;
@@ -1970,7 +1970,7 @@ pub enum HostEvent {
     },
     /// `callback_seq` is `Some` when this tree was fetched right after that submit.
     /// `themes` is Clojure-registered ThemeSets from the render response.
-    Tree(Node, Option<u64>, Vec<ThemeSet>),
+    Tree(Box<Node>, Option<u64>, Vec<ThemeSet>),
     Error(String),
     PickDirectory {
         request_id: String,
@@ -1985,6 +1985,12 @@ pub enum HostEvent {
     CapturePreview {
         request_id: String,
     },
+}
+
+impl HostEvent {
+    pub fn tree(node: Node, callback_seq: Option<u64>, themes: Vec<ThemeSet>) -> Self {
+        Self::Tree(Box::new(node), callback_seq, themes)
+    }
 }
 
 #[cfg(test)]
@@ -2535,7 +2541,7 @@ mod tests {
         let first = change_only.take_outbound(Some("cb-change".into()), None);
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].id, "cb-change");
-        assert!(change_only.on_ids_refreshed() == false);
+        assert!(!change_only.on_ids_refreshed());
         assert!(change_only.on_release(json!(10.0)));
         let poisoned = change_only.take_outbound(Some("cb-change".into()), None);
         assert!(

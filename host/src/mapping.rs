@@ -269,10 +269,11 @@ pub fn apply_text_overflow<E: Styled>(mut el: E, node: &Node) -> E {
         _ if truncate => el = el.text_ellipsis(),
         _ => {}
     }
-    if let Some(lines) = node.line_clamp {
-        if lines.is_finite() && lines >= 1.0 {
-            el = el.line_clamp(lines as usize);
-        }
+    if let Some(lines) = node.line_clamp
+        && lines.is_finite()
+        && lines >= 1.0
+    {
+        el = el.line_clamp(lines as usize);
     }
     if text_needs_min_w_0(node) {
         el = el.min_w_0();

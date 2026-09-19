@@ -6,7 +6,7 @@ A library for writing **native GPUI applications in real Clojure**.
 
 This is not a Clojure-like language, a Lisp-inspired DSL, or a toy interpreter. Application code is ordinary JVM Clojure: `def`, `defn`, `defonce`, atoms, `#()`, `map`, macros, namespaces. Rust owns the GPUI window and translates Clojure data into native [GPUI Kit](https://gpui-kit.com) widgets.
 
-There is no Clojars release yet. Depend on this repo with `:local/root` or a git SHA. GitHub Actions runs `./scripts/ci.sh` on Ubuntu and macOS (Rust unit plus production-renderer interaction tests, Clojure tests, cljfmt, and the windowless socket protocol test). macOS additionally runs the explicit offscreen Metal pixel target.
+There is no Clojars release yet. Depend on this repo with `:local/root` or a git SHA. GitHub Actions runs `./scripts/ci.sh` on Ubuntu and macOS (Rust unit plus production-renderer interaction tests, strict Clippy, Clojure tests, cljfmt, and the windowless socket protocol test). macOS additionally runs the explicit offscreen Metal pixel target.
 
 ![screenshot](https://i.imgur.com/gKXfCnx.png)
 

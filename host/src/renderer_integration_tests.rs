@@ -134,7 +134,7 @@ async fn production_renderer_round_trips_unicode_and_returned_tree(cx: &mut Test
     assert!(matches!(cmd_rx.recv().unwrap(), Cmd::Render));
 
     event_tx
-        .send(HostEvent::Tree(
+        .send(HostEvent::tree(
             fixture_tree("", "Save", "Ready"),
             None,
             vec![],
@@ -169,7 +169,7 @@ async fn production_renderer_round_trips_unicode_and_returned_tree(cx: &mut Test
     assert_eq!(save_seq, Some(1));
 
     event_tx
-        .send(HostEvent::Tree(
+        .send(HostEvent::tree(
             fixture_tree("Ada λ🦀", "Saved", "Clojure accepted Unicode"),
             save_seq,
             vec![],
@@ -207,7 +207,7 @@ async fn production_renderer_controls_are_controlled_reorderable_and_disabled(
     });
     assert!(matches!(cmd_rx.recv().unwrap(), Cmd::Render));
     event_tx
-        .send(HostEvent::Tree(
+        .send(HostEvent::tree(
             controls_tree(false, false, false),
             None,
             vec![],
@@ -238,7 +238,7 @@ async fn production_renderer_controls_are_controlled_reorderable_and_disabled(
     )));
 
     event_tx
-        .send(HostEvent::Tree(
+        .send(HostEvent::tree(
             controls_tree(true, true, true),
             None,
             vec![],
@@ -287,7 +287,7 @@ async fn production_select_is_accessible_and_commits_once(cx: &mut TestAppContex
         .unwrap()
     };
     event_tx
-        .send(HostEvent::Tree(select_tree("clj"), None, vec![]))
+        .send(HostEvent::tree(select_tree("clj"), None, vec![]))
         .await
         .unwrap();
     cx.wait_for(handle.into(), Duration::from_secs(1), |window, _| {
@@ -318,7 +318,7 @@ async fn production_select_is_accessible_and_commits_once(cx: &mut TestAppContex
     ));
 
     event_tx
-        .send(HostEvent::Tree(select_tree("rs"), None, vec![]))
+        .send(HostEvent::tree(select_tree("rs"), None, vec![]))
         .await
         .unwrap();
     cx.wait_for(handle.into(), Duration::from_secs(1), |window, _| {
@@ -356,7 +356,7 @@ async fn production_slider_keeps_identity_and_controlled_value_across_tree_chang
     };
 
     event_tx
-        .send(HostEvent::Tree(slider_tree(20., false), None, vec![]))
+        .send(HostEvent::tree(slider_tree(20., false), None, vec![]))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -368,7 +368,7 @@ async fn production_slider_keeps_identity_and_controlled_value_across_tree_chang
     );
 
     event_tx
-        .send(HostEvent::Tree(slider_tree(65., true), None, vec![]))
+        .send(HostEvent::tree(slider_tree(65., true), None, vec![]))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -419,7 +419,7 @@ async fn production_slider_keeps_identity_and_controlled_value_across_tree_chang
     }))
     .unwrap();
     event_tx
-        .send(HostEvent::Tree(without_slider, None, vec![]))
+        .send(HostEvent::tree(without_slider, None, vec![]))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -436,7 +436,7 @@ async fn production_slider_keeps_identity_and_controlled_value_across_tree_chang
     );
 
     event_tx
-        .send(HostEvent::Tree(slider_tree(35., false), None, vec![]))
+        .send(HostEvent::tree(slider_tree(35., false), None, vec![]))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -489,7 +489,7 @@ async fn production_markdown_selection_autoscroll_stops_on_release(cx: &mut Test
     });
     assert!(matches!(cmd_rx.recv().unwrap(), Cmd::Render));
     event_tx
-        .send(HostEvent::Tree(tree, None, vec![]))
+        .send(HostEvent::tree(tree, None, vec![]))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -505,7 +505,7 @@ async fn production_markdown_selection_autoscroll_stops_on_release(cx: &mut Test
     visual.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
     visual.simulate_mouse_move(edge, Some(MouseButton::Left), Modifiers::default());
     visual.update(|window, cx| window.render_frame(cx));
-    let before = visual.update(|window, cx| TextSelection::selected_text(window, cx));
+    let before = visual.update(TextSelection::selected_text);
     assert!(!before.is_empty(), "the drag must start a text selection");
 
     for _ in 0..12 {
@@ -513,7 +513,7 @@ async fn production_markdown_selection_autoscroll_stops_on_release(cx: &mut Test
         visual.run_until_parked();
         visual.update(|window, cx| window.render_frame(cx));
     }
-    let held = visual.update(|window, cx| TextSelection::selected_text(window, cx));
+    let held = visual.update(TextSelection::selected_text);
     assert!(
         held.len() > before.len(),
         "holding at the viewport edge must extend selection: before={before:?}, held={held:?}"
@@ -524,7 +524,7 @@ async fn production_markdown_selection_autoscroll_stops_on_release(cx: &mut Test
     visual.run_until_parked();
     visual.update(|window, cx| window.render_frame(cx));
     assert_eq!(
-        visual.update(|window, cx| TextSelection::selected_text(window, cx)),
+        visual.update(TextSelection::selected_text),
         held,
         "mouse release must stop Markdown selection autoscroll"
     );
@@ -548,7 +548,7 @@ async fn production_editor_retains_crlf_search_and_identity_across_language_chan
     let original = "(defn greet []\r\n  \"Ada\")\r\n; greet";
 
     event_tx
-        .send(HostEvent::Tree(
+        .send(HostEvent::tree(
             editor_tree("clojure", original),
             None,
             vec![],
@@ -603,7 +603,7 @@ async fn production_editor_retains_crlf_search_and_identity_across_language_chan
     );
 
     event_tx
-        .send(HostEvent::Tree(editor_tree("rust", original), None, vec![]))
+        .send(HostEvent::tree(editor_tree("rust", original), None, vec![]))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -672,7 +672,7 @@ async fn production_collections_shrink_selection_and_retain_layout_state(cx: &mu
     });
     assert!(matches!(cmd_rx.recv().unwrap(), Cmd::Render));
     event_tx
-        .send(HostEvent::Tree(collection_tree(false), None, vec![]))
+        .send(HostEvent::tree(collection_tree(false), None, vec![]))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -704,7 +704,7 @@ async fn production_collections_shrink_selection_and_retain_layout_state(cx: &mu
     assert!(panel_sizes.iter().all(|size| *size > 0.));
 
     event_tx
-        .send(HostEvent::Tree(collection_tree(true), None, vec![]))
+        .send(HostEvent::tree(collection_tree(true), None, vec![]))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -751,7 +751,7 @@ async fn production_table_only_queries_painted_virtual_rows(cx: &mut TestAppCont
     }))
     .unwrap();
     event_tx
-        .send(HostEvent::Tree(tree, None, vec![]))
+        .send(HostEvent::tree(tree, None, vec![]))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -798,7 +798,7 @@ async fn production_calendar_days_are_accessible_and_selectable(cx: &mut TestApp
     }))
     .unwrap();
     event_tx
-        .send(HostEvent::Tree(tree, None, vec![]))
+        .send(HostEvent::tree(tree, None, vec![]))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -859,7 +859,7 @@ async fn production_dialog_uses_live_callbacks_closes_reopens_and_restores_focus
     assert!(matches!(cmd_rx.recv().unwrap(), Cmd::Render));
 
     event_tx
-        .send(HostEvent::Tree(dialog_tree(false, "1"), None, vec![]))
+        .send(HostEvent::tree(dialog_tree(false, "1"), None, vec![]))
         .await
         .unwrap();
     cx.wait_for(handle.into(), Duration::from_secs(1), |window, _| {
@@ -873,7 +873,7 @@ async fn production_dialog_uses_live_callbacks_closes_reopens_and_restores_focus
     .unwrap();
 
     event_tx
-        .send(HostEvent::Tree(dialog_tree(true, "1"), None, vec![]))
+        .send(HostEvent::tree(dialog_tree(true, "1"), None, vec![]))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -891,7 +891,7 @@ async fn production_dialog_uses_live_callbacks_closes_reopens_and_restores_focus
     })
     .await;
     event_tx
-        .send(HostEvent::Tree(dialog_tree(true, "2"), None, vec![]))
+        .send(HostEvent::tree(dialog_tree(true, "2"), None, vec![]))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -923,7 +923,7 @@ async fn production_dialog_uses_live_callbacks_closes_reopens_and_restores_focus
     assert_eq!(ids, vec!["ok-2", "close-2"]);
 
     event_tx
-        .send(HostEvent::Tree(
+        .send(HostEvent::tree(
             dialog_tree(false, "2"),
             ok_sequence,
             vec![],
@@ -932,7 +932,7 @@ async fn production_dialog_uses_live_callbacks_closes_reopens_and_restores_focus
         .unwrap();
     settle_root(handle, cx);
     event_tx
-        .send(HostEvent::Tree(dialog_tree(true, "3"), None, vec![]))
+        .send(HostEvent::tree(dialog_tree(true, "3"), None, vec![]))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -955,7 +955,7 @@ async fn production_dialog_uses_live_callbacks_closes_reopens_and_restores_focus
     assert_eq!(ids, vec!["cancel-3", "close-3"]);
 
     event_tx
-        .send(HostEvent::Tree(
+        .send(HostEvent::tree(
             dialog_tree(false, "3"),
             cancel_sequence,
             vec![],
@@ -964,7 +964,7 @@ async fn production_dialog_uses_live_callbacks_closes_reopens_and_restores_focus
         .unwrap();
     settle_root(handle, cx);
     event_tx
-        .send(HostEvent::Tree(dialog_tree(true, "4"), None, vec![]))
+        .send(HostEvent::tree(dialog_tree(true, "4"), None, vec![]))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -1004,7 +1004,7 @@ async fn production_sheet_mounts_after_deferred_open_and_closes_from_escape(
     }))
     .unwrap();
     event_tx
-        .send(HostEvent::Tree(tree, None, vec![]))
+        .send(HostEvent::tree(tree, None, vec![]))
         .await
         .unwrap();
     settle_root(handle, cx);
@@ -1051,7 +1051,7 @@ async fn production_nested_menu_emits_leaf_then_parent_callback(cx: &mut TestApp
     }))
     .unwrap();
     event_tx
-        .send(HostEvent::Tree(tree, None, vec![]))
+        .send(HostEvent::tree(tree, None, vec![]))
         .await
         .unwrap();
     cx.wait_for(handle.into(), Duration::from_secs(1), |window, _| {

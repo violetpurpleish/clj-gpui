@@ -8,6 +8,9 @@ cd "$root"
 echo "==> cargo test"
 cargo test --locked --manifest-path host/Cargo.toml
 
+echo "==> cargo clippy"
+cargo clippy --locked --manifest-path host/Cargo.toml --all-targets --test rendering -- -D warnings
+
 echo "==> cargo build (debug host)"
 cargo build --locked --manifest-path host/Cargo.toml
 

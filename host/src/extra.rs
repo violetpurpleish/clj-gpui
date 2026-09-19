@@ -350,7 +350,7 @@ fn nav_item_from_wire(item: &NavItemWire) -> Option<NavItemSpec> {
             ..NavItemSpec::default()
         }),
         NavItemWire::Cases(_) => None,
-        NavItemWire::Spec(spec) if nav_item_spec_effective(spec) => Some(spec.clone()),
+        NavItemWire::Spec(spec) if nav_item_spec_effective(spec) => Some((**spec).clone()),
         NavItemWire::Spec(_) => None,
     }
 }
@@ -359,9 +359,7 @@ fn nav_item_from_wire(item: &NavItemWire) -> Option<NavItemSpec> {
 /// Clojure fns warn once; empty specs are silent. `None` means either
 /// omitted or a usable recipe.
 pub fn nav_item_reject_reason(item: Option<&NavItemWire>) -> Option<String> {
-    let Some(item) = item else {
-        return None;
-    };
+    let item = item?;
     if nav_item_from_wire(item).is_some() {
         return None;
     }
@@ -433,23 +431,22 @@ fn nav_item_case_matches(
     operation: Option<gpui::base::NavOperation>,
     index: usize,
 ) -> bool {
-    if let Some(want) = case.phase.as_deref().filter(|s| !s.is_empty()) {
-        if crate::catalog::normalize(want) != nav_phase_name(phase) {
-            return false;
-        }
+    if let Some(want) = case.phase.as_deref().filter(|s| !s.is_empty())
+        && crate::catalog::normalize(want) != nav_phase_name(phase)
+    {
+        return false;
     }
-    if let Some(names) = nav_operation_names(&case.operation) {
-        if !names
+    if let Some(names) = nav_operation_names(&case.operation)
+        && !names
             .iter()
             .any(|name| name == nav_operation_name(operation))
-        {
-            return false;
-        }
+    {
+        return false;
     }
-    if let Some(want) = case.index.filter(|n| n.is_finite()) {
-        if want.round() as usize != index {
-            return false;
-        }
+    if let Some(want) = case.index.filter(|n| n.is_finite())
+        && want.round() as usize != index
+    {
+        return false;
     }
     true
 }
@@ -579,10 +576,7 @@ pub fn nav_same_id_replace(
     let Some(token) = token else {
         return false;
     };
-    match last {
-        Some((id, prev)) if *id == entity && prev != token => true,
-        _ => false,
-    }
+    matches!(last, Some((id, prev)) if *id == entity && prev != token)
 }
 
 /// Bind the observed token to a history-entry entity.
@@ -1771,10 +1765,10 @@ pub fn chart_stroke_style_name(value: Option<&str>) -> Option<&'static str> {
 
 fn ensure_series_values(points: &mut [ChartPoint]) {
     for point in points {
-        if point.values.is_empty() {
-            if let Some(v) = point.value {
-                point.values = vec![v];
-            }
+        if point.values.is_empty()
+            && let Some(v) = point.value
+        {
+            point.values = vec![v];
         }
     }
 }
@@ -1806,7 +1800,7 @@ fn chart_series_meta(node: &Node) -> Vec<ChartSeriesMeta> {
 }
 
 fn area_stroke_hex<'a>(meta: &'a [ChartSeriesMeta], i: usize, node: &'a Node) -> Option<&'a str> {
-    meta.get(i).and_then(|s| s.stroke.as_deref()).or_else(|| {
+    meta.get(i).and_then(|s| s.stroke.as_deref()).or({
         if i == 0 && meta.is_empty() {
             node.stroke.as_deref()
         } else {
@@ -1820,15 +1814,13 @@ fn area_fill_hex(meta: &[ChartSeriesMeta], i: usize) -> Option<&str> {
 }
 
 fn area_style_raw<'a>(meta: &'a [ChartSeriesMeta], i: usize, node: &'a Node) -> Option<&'a str> {
-    meta.get(i)
-        .and_then(|s| s.stroke_style.as_deref())
-        .or_else(|| {
-            if i == 0 && meta.is_empty() {
-                node.stroke_style.as_deref()
-            } else {
-                None
-            }
-        })
+    meta.get(i).and_then(|s| s.stroke_style.as_deref()).or({
+        if i == 0 && meta.is_empty() {
+            node.stroke_style.as_deref()
+        } else {
+            None
+        }
+    })
 }
 
 fn radar_dimension_label(point: &ChartPoint) -> RadarLabel {
@@ -5014,7 +5006,7 @@ mod tests {
         let custom = Node {
             kind: "nav-stack".into(),
             transition_style: Some("slide".into()),
-            item: Some(NavItemWire::Spec(NavItemSpec {
+            item: Some(NavItemWire::Spec(Box::new(NavItemSpec {
                 cases: vec![NavItemCase {
                     phase: Some("entering".into()),
                     operation: Some(json!("push")),
@@ -5022,7 +5014,7 @@ mod tests {
                     ..NavItemCase::default()
                 }],
                 ..NavItemSpec::default()
-            })),
+            }))),
             ..Node::default()
         };
         let spec = nav_item_spec(&custom).expect("custom item");
@@ -5055,7 +5047,7 @@ mod tests {
 
         let empty = Node {
             kind: "nav-stack".into(),
-            item: Some(NavItemWire::Spec(NavItemSpec::default())),
+            item: Some(NavItemWire::Spec(Box::default())),
             transition_style: Some("slide".into()),
             ..Node::default()
         };

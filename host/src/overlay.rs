@@ -515,10 +515,10 @@ impl QueuedAction {
                 found = Some(node.clone());
             }
         });
-        if found.is_none() {
-            if let Self::ButtonClick { .. } = self {
-                found = node_at_static_path(tree, key);
-            }
+        if found.is_none()
+            && let Self::ButtonClick { .. } = self
+        {
+            found = node_at_static_path(tree, key);
         }
         let Some(node) = found else { return Vec::new() };
         match self {
@@ -1105,12 +1105,11 @@ fn node_at_static_path(tree: &Node, path: &str) -> Option<Node> {
             "dialog" | "alert-dialog" | "popover" | "sheet" => {
                 if let Some(rel) = static_rel(path, &format!("{key}/content")) {
                     found = node_at_static_rel(&node.children, rel).cloned();
-                } else if node.kind == "sheet" {
-                    if let Some(footer) = node.footer.as_deref() {
-                        if let Some(rel) = static_rel(path, &format!("{key}/footer")) {
-                            found = node_at_static_rel(std::slice::from_ref(footer), rel).cloned();
-                        }
-                    }
+                } else if node.kind == "sheet"
+                    && let Some(footer) = node.footer.as_deref()
+                    && let Some(rel) = static_rel(path, &format!("{key}/footer"))
+                {
+                    found = node_at_static_rel(std::slice::from_ref(footer), rel).cloned();
                 }
             }
             "dock" => {

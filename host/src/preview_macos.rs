@@ -27,7 +27,7 @@
 use gpui_kit as gpui;
 use std::ffi::c_char;
 use std::ptr::NonNull;
-use std::sync::{mpsc, Once};
+use std::sync::{Once, mpsc};
 use std::time::Duration;
 
 use block2::RcBlock;
@@ -35,7 +35,7 @@ use image::RgbaImage;
 use objc2::ffi::{class_addMethod, class_replaceMethod};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
-use objc2::{msg_send, sel, AnyThread, ClassType, MainThreadMarker};
+use objc2::{AnyThread, ClassType, MainThreadMarker, msg_send, sel};
 use objc2_app_kit::NSView;
 use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
@@ -220,7 +220,7 @@ fn find_sc_window(content: &SCShareableContent, want: Option<u32>) -> Option<Ret
         let owner = unsafe { window.owningApplication() };
         let owner_pid = owner
             .as_ref()
-            .map(|app| unsafe { app.processID() as i32 })
+            .map(|app| unsafe { app.processID() })
             .unwrap_or(0);
         if owner_pid != pid || unsafe { window.windowLayer() } != 0 {
             continue;
@@ -285,7 +285,7 @@ fn cg_image_to_rgba(cg_image: Option<&CGImage>) -> Option<RgbaImage> {
     for row in data.chunks_exact(bytes_per_row) {
         buffer.extend_from_slice(&row[..width * 4]);
     }
-    for bgra in buffer.chunks_exact_mut(4) {
+    for bgra in buffer.as_chunks_mut::<4>().0 {
         bgra.swap(0, 2);
     }
     let image = RgbaImage::from_raw(width as u32, height as u32, buffer)?;

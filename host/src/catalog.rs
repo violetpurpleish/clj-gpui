@@ -255,12 +255,11 @@ fn dir_cache() -> &'static Mutex<HashMap<PathBuf, DirSnapshot>> {
 fn cached_dir_sets(dir: &Path) -> Vec<ThemeSet> {
     let files = json_files(dir);
     let fp = fingerprint(&files);
-    if let Ok(cache) = dir_cache().lock() {
-        if let Some(snap) = cache.get(dir) {
-            if snap.fingerprint == fp {
-                return snap.sets.clone();
-            }
-        }
+    if let Ok(cache) = dir_cache().lock()
+        && let Some(snap) = cache.get(dir)
+        && snap.fingerprint == fp
+    {
+        return snap.sets.clone();
     }
     let sets = load_sets_from_files(&files);
     if let Ok(mut cache) = dir_cache().lock() {
@@ -356,7 +355,7 @@ pub fn bundled_names() -> Vec<String> {
         .filter_map(|json| serde_json::from_str::<ThemeSet>(json).ok())
         .flat_map(|set| set.themes.into_iter().map(|theme| theme.name.to_string()))
         .collect();
-    names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    names.sort_by_key(|a| a.to_lowercase());
     names
 }
 
@@ -404,9 +403,9 @@ mod tests {
         assert_eq!(normalize("Tokyo_Night"), "tokyo night");
         assert_eq!(normalize("Catppuccin Violet"), "catppuccin violet");
         assert_eq!(normalize("catppuccin-violet"), "catppuccin violet");
-        assert_eq!(is_appearance("Light"), true);
-        assert_eq!(is_appearance("  SYSTEM  "), true);
-        assert_eq!(is_appearance("my-theme"), false);
+        assert!(is_appearance("Light"));
+        assert!(is_appearance("  SYSTEM  "));
+        assert!(!is_appearance("my-theme"));
     }
 
     #[test]

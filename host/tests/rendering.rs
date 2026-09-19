@@ -104,7 +104,7 @@ mod macos {
             .expect("open offscreen production window");
 
         event_tx
-            .send_blocking(protocol::HostEvent::Tree(
+            .send_blocking(protocol::HostEvent::tree(
                 tree(
                     "(defn greet [name]\n  (str \"Hello, \" name))",
                     true,
@@ -128,7 +128,7 @@ mod macos {
         }
 
         event_tx
-            .send_blocking(protocol::HostEvent::Tree(
+            .send_blocking(protocol::HostEvent::tree(
                 tree(
                     "(defn greet [name]\n  (str \"Welcome, \" name \"!\"))",
                     false,
@@ -149,7 +149,7 @@ mod macos {
         }
 
         event_tx
-            .send_blocking(protocol::HostEvent::Tree(
+            .send_blocking(protocol::HostEvent::tree(
                 tree(
                     "(defn greet [name]\n  (str \"Welcome, \" name \"!\"))",
                     false,
@@ -196,7 +196,7 @@ mod macos {
             })
         });
         event_tx
-            .send_blocking(protocol::HostEvent::Tree(
+            .send_blocking(protocol::HostEvent::tree(
                 serde_json::from_value(json!({
                     "type": "window", "chrome": "app", "theme": "light",
                     "padding": 20, "gap": 12, "children": children

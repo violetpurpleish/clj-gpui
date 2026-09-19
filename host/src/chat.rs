@@ -205,10 +205,8 @@ fn scroll_item_spec(value: Option<&Value>) -> Option<String> {
         Some(Value::Number(n)) => {
             if let Some(u) = n.as_u64() {
                 Some(u.to_string())
-            } else if let Some(i) = n.as_i64() {
-                Some(i.to_string())
             } else {
-                None
+                n.as_i64().map(|i| i.to_string())
             }
         }
         Some(_) => None,
@@ -461,16 +459,16 @@ fn kit_button<P: NodePainter>(p: &P, node: &Node, path: &str) -> Button {
         button = button.label(label.to_string());
     }
     button = mapping::apply_button_chrome(button, node, p.app());
-    if let Some(callback) = node.on_click.clone() {
-        if let Some(tx) = p.cmd_tx() {
-            button = button.on_click(move |_, _, _| {
-                let _ = tx.send(Cmd::Callback {
-                    id: callback.clone(),
-                    value: None,
-                    seq: None,
-                });
+    if let Some(callback) = node.on_click.clone()
+        && let Some(tx) = p.cmd_tx()
+    {
+        button = button.on_click(move |_, _, _| {
+            let _ = tx.send(Cmd::Callback {
+                id: callback.clone(),
+                value: None,
+                seq: None,
             });
-        }
+        });
     }
     button
 }
@@ -637,10 +635,8 @@ fn render_bubble<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> Bubble {
         bubble = bubble.content(render_bubble_content(p, child, &child_path));
     }
     if kids.is_empty() {
-        if !has_content_slot {
-            if let Some(text) = node.text.clone().filter(|s| !s.is_empty()) {
-                bubble = bubble.child(text);
-            }
+        if !has_content_slot && let Some(text) = node.text.clone().filter(|s| !s.is_empty()) {
+            bubble = bubble.child(text);
         }
     } else {
         for (child, child_path) in kids {
@@ -708,16 +704,16 @@ fn render_attachment<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> Atta
     if let Some(id) = node.id.clone().filter(|s| !s.is_empty()) {
         attachment = attachment.id(id);
     }
-    if let Some(callback) = node.on_click.clone() {
-        if let Some(tx) = p.cmd_tx() {
-            attachment = attachment.on_click(move |_, _, _| {
-                let _ = tx.send(Cmd::Callback {
-                    id: callback.clone(),
-                    value: None,
-                    seq: None,
-                });
+    if let Some(callback) = node.on_click.clone()
+        && let Some(tx) = p.cmd_tx()
+    {
+        attachment = attachment.on_click(move |_, _, _| {
+            let _ = tx.send(Cmd::Callback {
+                id: callback.clone(),
+                value: None,
+                seq: None,
             });
-        }
+        });
     }
     let mut media = None;
     let mut content = None;
@@ -900,10 +896,8 @@ fn render_marker<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> Marker {
             _ => marker = marker.child(paint_child(p, child, &child_path)),
         }
     }
-    if !has_content {
-        if let Some(text) = node.text.clone().filter(|s| !s.is_empty()) {
-            marker = marker.content(MarkerContent::new().text(text));
-        }
+    if !has_content && let Some(text) = node.text.clone().filter(|s| !s.is_empty()) {
+        marker = marker.content(MarkerContent::new().text(text));
     }
     apply_node_style(marker, node)
 }

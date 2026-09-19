@@ -238,11 +238,16 @@ pub enum TableSelectionSync {
     Clear,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CurrentTableSelection {
+    pub mode: TableSelectionMode,
+    pub row: Option<usize>,
+    pub cell: Option<(usize, usize)>,
+}
+
 pub fn table_selection_sync(
     wanted: &TableSelectionWanted,
-    mode: TableSelectionMode,
-    selected_row: Option<usize>,
-    selected_cell: Option<(usize, usize)>,
+    current: CurrentTableSelection,
     row_index: impl Fn(&str) -> Option<usize>,
     col_index: impl Fn(&str) -> Option<usize>,
     row_exists: impl Fn(&str) -> bool,
@@ -250,7 +255,7 @@ pub fn table_selection_sync(
 ) -> TableSelectionSync {
     match wanted {
         TableSelectionWanted::Clear => {
-            if matches!(mode, TableSelectionMode::None) {
+            if matches!(current.mode, TableSelectionMode::None) {
                 TableSelectionSync::Keep
             } else {
                 TableSelectionSync::Clear
@@ -258,14 +263,12 @@ pub fn table_selection_sync(
         }
         TableSelectionWanted::Row(id) => {
             if let Some(ix) = row_index(id) {
-                if mode == TableSelectionMode::Row && selected_row == Some(ix) {
+                if current.mode == TableSelectionMode::Row && current.row == Some(ix) {
                     TableSelectionSync::Keep
                 } else {
                     TableSelectionSync::SelectRow(ix)
                 }
-            } else if row_exists(id) {
-                TableSelectionSync::Keep
-            } else if matches!(mode, TableSelectionMode::None) {
+            } else if row_exists(id) || matches!(current.mode, TableSelectionMode::None) {
                 TableSelectionSync::Keep
             } else {
                 TableSelectionSync::Clear
@@ -273,14 +276,14 @@ pub fn table_selection_sync(
         }
         TableSelectionWanted::Cell { row, col } => match (row_index(row), col_index(col)) {
             (Some(r), Some(c)) => {
-                if mode == TableSelectionMode::Cell && selected_cell == Some((r, c)) {
+                if current.mode == TableSelectionMode::Cell && current.cell == Some((r, c)) {
                     TableSelectionSync::Keep
                 } else {
                     TableSelectionSync::SelectCell(r, c)
                 }
             }
             _ if row_exists(row) && col_exists(col) => TableSelectionSync::Keep,
-            _ if matches!(mode, TableSelectionMode::None) => TableSelectionSync::Keep,
+            _ if matches!(current.mode, TableSelectionMode::None) => TableSelectionSync::Keep,
             _ => TableSelectionSync::Clear,
         },
     }
@@ -437,7 +440,7 @@ pub fn sort_table_rows(rows: &mut [Row], col_ix: usize, sort: ColumnSort, source
 
 /// After a Clojure column merge, re-apply an active Asc/Desc so row order
 /// matches header chrome. Default / no-sort restores `source_order`.
-pub fn apply_active_column_sort(columns: &[Column], rows: &mut Vec<Row>, source_order: &[String]) {
+pub fn apply_active_column_sort(columns: &[Column], rows: &mut [Row], source_order: &[String]) {
     if let Some((ix, sort)) = columns.iter().enumerate().find_map(|(ix, col)| {
         col.sort
             .filter(|sort| !matches!(sort, ColumnSort::Default))
@@ -953,6 +956,35 @@ pub struct RowTableDelegate {
     selection_mode: Cell<TableSelectionMode>,
 }
 
+pub struct TableChrome {
+    loading: bool,
+    has_more: bool,
+    load_more_threshold: usize,
+    empty: Option<String>,
+    on_load_more: Option<String>,
+    on_sort: Option<String>,
+}
+
+impl TableChrome {
+    pub fn new(
+        loading: bool,
+        has_more: bool,
+        load_more_threshold: usize,
+        empty: Option<String>,
+        on_load_more: Option<String>,
+        on_sort: Option<String>,
+    ) -> Self {
+        Self {
+            loading,
+            has_more,
+            load_more_threshold,
+            empty,
+            on_load_more,
+            on_sort,
+        }
+    }
+}
+
 impl RowTableDelegate {
     pub fn new(columns: Vec<Column>, rows: Vec<Row>) -> Self {
         let source_order: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
@@ -988,29 +1020,20 @@ impl RowTableDelegate {
         self
     }
 
-    pub fn sync_chrome(
-        &mut self,
-        loading: bool,
-        has_more: bool,
-        load_more_threshold: usize,
-        empty: Option<String>,
-        on_load_more: Option<String>,
-        on_sort: Option<String>,
-        collection_changed: bool,
-    ) {
+    pub fn sync_chrome(&mut self, chrome: TableChrome, collection_changed: bool) {
         let reset = load_more_latch_resets(
             collection_changed,
-            has_more,
-            loading,
+            chrome.has_more,
+            chrome.loading,
             self.on_load_more.is_some(),
-            on_load_more.is_some(),
+            chrome.on_load_more.is_some(),
         );
-        self.loading = loading;
-        self.has_more = has_more;
-        self.load_more_threshold = load_more_threshold;
-        self.empty = empty;
-        self.on_load_more = on_load_more;
-        self.on_sort = on_sort;
+        self.loading = chrome.loading;
+        self.has_more = chrome.has_more;
+        self.load_more_threshold = chrome.load_more_threshold;
+        self.empty = chrome.empty;
+        self.on_load_more = chrome.on_load_more;
+        self.on_sort = chrome.on_sort;
         if reset {
             self.load_more_sent = false;
         }
@@ -1733,7 +1756,7 @@ mod tests {
     }
 
     fn sort_and_remap(
-        rows: &mut Vec<Row>,
+        rows: &mut [Row],
         col_ix: usize,
         sort: ColumnSort,
         source: &[String],
@@ -1956,9 +1979,11 @@ mod tests {
         assert_eq!(
             table_selection_sync(
                 &TableSelectionWanted::Row("a".into()),
-                TableSelectionMode::Row,
-                Some(1),
-                Some((0, 1)),
+                CurrentTableSelection {
+                    mode: TableSelectionMode::Row,
+                    row: Some(1),
+                    cell: Some((0, 1)),
+                },
                 row,
                 col,
                 exists,
@@ -1974,9 +1999,11 @@ mod tests {
                     row: "a".into(),
                     col: "lang".into()
                 },
-                TableSelectionMode::Cell,
-                Some(0),
-                Some((1, 1)),
+                CurrentTableSelection {
+                    mode: TableSelectionMode::Cell,
+                    row: Some(0),
+                    cell: Some((1, 1)),
+                },
                 row,
                 col,
                 exists,
@@ -1992,9 +2019,11 @@ mod tests {
                     row: "b".into(),
                     col: "lang".into()
                 },
-                TableSelectionMode::Row,
-                Some(1),
-                Some((0, 1)),
+                CurrentTableSelection {
+                    mode: TableSelectionMode::Row,
+                    row: Some(1),
+                    cell: Some((0, 1)),
+                },
                 row,
                 col,
                 exists,
@@ -2071,12 +2100,15 @@ mod tests {
         let cols = columns_from_items(&items(json!([{"id": "name", "label": "Name"}])));
         let rows = rows_from_items(&items(json!([{"id": "alpha", "cells": ["Alpha"]}])));
         let mut table = RowTableDelegate::new(cols, rows).with_cell_host("tbl", tx);
-        table.sync_chrome(false, true, 20, None, None, None, true);
+        table.sync_chrome(TableChrome::new(false, true, 20, None, None, None), true);
         table.fire_load_more();
         assert!(!table.load_more_sent());
         assert!(rx.try_recv().is_err());
 
-        table.sync_chrome(false, true, 20, None, Some("cb-1".into()), None, false);
+        table.sync_chrome(
+            TableChrome::new(false, true, 20, None, Some("cb-1".into()), None),
+            false,
+        );
         assert!(!table.load_more_sent());
         table.fire_load_more();
         assert!(table.load_more_sent());
@@ -2084,13 +2116,19 @@ mod tests {
             Ok(Cmd::Callback { id, .. }) => assert_eq!(id, "cb-1"),
             other => panic!("expected table load-more callback, got {other:?}"),
         }
-        table.sync_chrome(false, true, 20, None, Some("cb-2".into()), None, false);
+        table.sync_chrome(
+            TableChrome::new(false, true, 20, None, Some("cb-2".into()), None),
+            false,
+        );
         assert!(table.load_more_sent());
         table.fire_load_more();
         assert!(rx.try_recv().is_err());
-        table.sync_chrome(false, true, 20, None, None, None, false);
+        table.sync_chrome(TableChrome::new(false, true, 20, None, None, None), false);
         assert!(table.load_more_sent());
-        table.sync_chrome(false, true, 20, None, Some("cb-1".into()), None, false);
+        table.sync_chrome(
+            TableChrome::new(false, true, 20, None, Some("cb-1".into()), None),
+            false,
+        );
         assert!(!table.load_more_sent());
         table.fire_load_more();
         match rx.try_recv() {
@@ -2238,9 +2276,11 @@ mod tests {
                     row: "ada".into(),
                     col: "lang".into()
                 },
-                TableSelectionMode::Row,
-                Some(0),
-                None,
+                CurrentTableSelection {
+                    mode: TableSelectionMode::Row,
+                    row: Some(0),
+                    cell: None,
+                },
                 |_| Some(0),
                 |_| Some(1),
                 |_| true,
@@ -2254,9 +2294,11 @@ mod tests {
                     row: "ada".into(),
                     col: "lang".into()
                 },
-                TableSelectionMode::Cell,
-                None,
-                Some((0, 1)),
+                CurrentTableSelection {
+                    mode: TableSelectionMode::Cell,
+                    row: None,
+                    cell: Some((0, 1)),
+                },
                 |_| Some(0),
                 |_| Some(1),
                 |_| true,
@@ -2268,7 +2310,7 @@ mod tests {
         assert!(table_export_generation(Some(&json!(""))).is_none());
         let grouped = items(json!([{"label": "Identity", "span": 2}]));
         assert_ne!(
-            header_groups_fingerprint(&[grouped.clone()]),
+            header_groups_fingerprint(std::slice::from_ref(&grouped)),
             header_groups_fingerprint(&[])
         );
         let mut moved_cols = columns_from_items(&items(json!([
