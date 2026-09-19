@@ -75,7 +75,7 @@ use gpui_kit as gpui;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component as gpui_component;
 use serde_json::{Value, json};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
@@ -270,6 +270,7 @@ struct CommandSlot {
 }
 
 struct MessageScrollerSlot {
+    follow_viewport_height: Rc<Cell<f32>>,
     state: Entity<MessageScrollerState>,
     items: Rc<RefCell<Vec<Node>>>,
     last_ids: Vec<String>,
@@ -4928,11 +4929,30 @@ impl RootView {
         node: &Node,
         path: &str,
         key: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.used_scrollers.insert(key.to_string());
-        let children = node.children.clone();
+        let follow_target = node
+            .follow_child
+            .clone()
+            .filter(|id| !id.is_empty())
+            .filter(|_| node.scroll_to_end != Some(true));
+        let follow_viewport_height = self
+            .scrollers
+            .get(key)
+            .map(|slot| slot.follow_viewport_height.clone())
+            .unwrap_or_else(|| Rc::new(Cell::new(f32::from(window.viewport_size().height))));
+        let mut children = node.children.clone();
+        if follow_target.is_some() {
+            // A virtual trailing row lets even the last real line reach the top.
+            children.push(Node {
+                kind: "spacer".into(),
+                id: Some(format!("{key}-follow-tail")),
+                height: Some(follow_viewport_height.get()),
+                ..Node::default()
+            });
+        }
         let ids: Vec<String> = children
             .iter()
             .enumerate()
@@ -4946,6 +4966,7 @@ impl RootView {
             self.scrollers.insert(
                 key.to_string(),
                 MessageScrollerSlot {
+                    follow_viewport_height: follow_viewport_height.clone(),
                     state,
                     items: Rc::new(RefCell::new(children)),
                     last_ids: ids.clone(),
@@ -5003,6 +5024,11 @@ impl RootView {
             Self::apply_message_scroller_scroll(slot, node, &ids, cx);
         }
         let slot = self.scrollers.get(key).expect("scroller slot");
+        let follow = follow_target.map(|target| overlay::ScrollerFollow {
+            target,
+            viewport_height: follow_viewport_height,
+            state: slot.state.clone(),
+        });
         let items = slot.items.clone();
         let cmd_tx = self.cmd_tx.clone();
         let row_path = path.to_string();
@@ -5012,11 +5038,12 @@ impl RootView {
             move |index, _, cx| {
                 let tree = items.borrow();
                 match tree.get(index) {
-                    Some(row) => overlay::paint_scroller_tree(
+                    Some(row) => overlay::paint_following_scroller_tree(
                         row,
                         &format!("{row_path}.{index}"),
                         &cmd_tx,
-                        Some(cx),
+                        cx,
+                        follow.as_ref(),
                     ),
                     None => div().into_any_element(),
                 }

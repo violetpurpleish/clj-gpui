@@ -162,7 +162,8 @@
         class-dir (str (io/file (:target cfg) "classes"))
         jar-file (str (io/file (:target cfg) (str (:name cfg) ".jar")))
         src-dirs (filterv #(.isDirectory (io/file %)) ["src" "resources"])
-        basis (b-create {:project "deps.edn"})]
+        basis (b-create (cond-> {:project "deps.edn"}
+                          (seq (:basis-aliases cfg)) (assoc :aliases (:basis-aliases cfg))))]
     (b-delete {:path class-dir})
     (when (seq src-dirs)
       (b-copy-dir {:src-dirs src-dirs :target-dir class-dir}))

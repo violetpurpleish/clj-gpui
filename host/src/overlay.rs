@@ -8,6 +8,7 @@
 use crate::chat;
 use crate::mapping;
 use crate::protocol::{self, Cmd, Item, Node};
+use gpui::StatefulInteractiveElement;
 use gpui::{
     App, Axis, Div, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
     Window, div, px,
@@ -37,9 +38,10 @@ use gpui_component::{
     v_flex,
 };
 use gpui_kit as gpui;
+use gpui_kit::TestSupportExt as _;
 use gpui_kit::component as gpui_component;
 use serde_json::{Value, json};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::mpsc;
@@ -825,11 +827,12 @@ fn chart_host(child: impl IntoElement, node: &Node, path: &str) -> gpui::AnyElem
 struct ChartPaint<'a> {
     cmd_tx: Option<&'a mpsc::Sender<Cmd>>,
     cx: Option<&'a App>,
+    follow: Option<&'a ScrollerFollow>,
 }
 
 impl crate::chat::NodePainter for ChartPaint<'_> {
     fn paint_node(&mut self, node: &Node, path: &str) -> gpui::AnyElement {
-        paint_static_tree(node, path, self.cmd_tx, self.cx)
+        paint_following_static_tree(node, path, self.cmd_tx, self.cx, self.follow)
     }
 
     fn cmd_tx(&self) -> Option<mpsc::Sender<Cmd>> {
@@ -866,14 +869,86 @@ pub(crate) fn paint_scroller_tree(
     paint_static_tree(node, path, Some(cmd_tx), cx)
 }
 
+/// Native layout supplies the line position, so following survives font and width changes.
+#[derive(Clone)]
+pub(crate) struct ScrollerFollow {
+    pub target: String,
+    pub viewport_height: Rc<Cell<f32>>,
+    pub state: gpui::Entity<gpui_component::message_scroller::MessageScrollerState>,
+}
+
+pub(crate) fn paint_following_scroller_tree(
+    node: &Node,
+    path: &str,
+    cmd_tx: &mpsc::Sender<Cmd>,
+    cx: &App,
+    follow: Option<&ScrollerFollow>,
+) -> gpui::AnyElement {
+    paint_following_static_tree(node, path, Some(cmd_tx), Some(cx), follow)
+}
+
 fn paint_static_tree(
     node: &Node,
     path: &str,
     cmd_tx: Option<&mpsc::Sender<Cmd>>,
     cx: Option<&App>,
 ) -> gpui::AnyElement {
+    paint_following_static_tree(node, path, cmd_tx, cx, None)
+}
+
+fn paint_following_static_tree(
+    node: &Node,
+    path: &str,
+    cmd_tx: Option<&mpsc::Sender<Cmd>>,
+    cx: Option<&App>,
+    follow: Option<&ScrollerFollow>,
+) -> gpui::AnyElement {
+    let content = paint_static_contents(node, path, cmd_tx, cx, follow);
+    let Some(follow) = follow.filter(|follow| node.id.as_deref() == Some(&follow.target)) else {
+        return content;
+    };
+    let follow = follow.clone();
+    div()
+        .relative()
+        .child(content)
+        .child(
+            gpui::canvas(
+                move |bounds, window, _cx| {
+                    // List installs its viewport mask before prepainting each row.
+                    // Requesting a viewport-sized rectangle beginning at the word
+                    // aligns the word's line, not just its enclosing paragraph.
+                    let height = window.content_mask().bounds.size.height;
+                    if (follow.viewport_height.get() - f32::from(height)).abs() > 0.5 {
+                        follow.viewport_height.set(f32::from(height));
+                        let state = follow.state.clone();
+                        window.on_next_frame(move |_, cx| {
+                            state.update(cx, |state, cx| state.remeasure(cx));
+                        });
+                    }
+                    window.request_autoscroll(gpui::Bounds::new(
+                        bounds.origin,
+                        gpui::size(bounds.size.width, height),
+                    ));
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
+        )
+        .into_any_element()
+}
+
+fn paint_static_contents(
+    node: &Node,
+    path: &str,
+    cmd_tx: Option<&mpsc::Sender<Cmd>>,
+    cx: Option<&App>,
+    follow: Option<&ScrollerFollow>,
+) -> gpui::AnyElement {
     if chat::is_chat_kind(&node.kind) {
-        return chat::render_any(&mut ChartPaint { cmd_tx, cx }, node, path);
+        return chat::render_any(&mut ChartPaint { cmd_tx, cx, follow }, node, path);
     }
     match node.kind.as_str() {
         "button" => {
@@ -896,12 +971,24 @@ fn paint_static_tree(
         }
         "hstack" => chart_layout(h_flex().gap(px(node.gap.unwrap_or(8.))), node)
             .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx, cx)
+                paint_following_static_tree(
+                    child,
+                    &static_child_path(path, child_ix),
+                    cmd_tx,
+                    cx,
+                    follow,
+                )
             }))
             .into_any_element(),
         "vstack" => chart_layout(v_flex().gap(px(node.gap.unwrap_or(8.))), node)
             .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx, cx)
+                paint_following_static_tree(
+                    child,
+                    &static_child_path(path, child_ix),
+                    cmd_tx,
+                    cx,
+                    follow,
+                )
             }))
             .into_any_element(),
         "spacer" => {
@@ -990,7 +1077,13 @@ fn paint_static_tree(
         "badge" => {
             let mut badge = mapping::apply_badge_chrome(Badge::new(), node);
             badge = badge.children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx, cx)
+                paint_following_static_tree(
+                    child,
+                    &static_child_path(path, child_ix),
+                    cmd_tx,
+                    cx,
+                    follow,
+                )
             }));
             chart_host(badge, &mapping::badge_host_node(node), path)
         }
@@ -1046,7 +1139,13 @@ fn paint_static_tree(
             }
             chart_layout(
                 circle.children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                    paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx, cx)
+                    paint_following_static_tree(
+                        child,
+                        &static_child_path(path, child_ix),
+                        cmd_tx,
+                        cx,
+                        follow,
+                    )
                 })),
                 node,
             )
@@ -1113,20 +1212,59 @@ fn paint_static_tree(
             }
             chart_layout(box_, node)
                 .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                    paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx, cx)
+                    paint_following_static_tree(
+                        child,
+                        &static_child_path(path, child_ix),
+                        cmd_tx,
+                        cx,
+                        follow,
+                    )
                 }))
                 .into_any_element()
         }
-        "label" => chart_layout(mapping::kit_label(node), node).into_any_element(),
+        "label" => {
+            let label = chart_layout(mapping::kit_label(node), node);
+            if let (Some(id), Some(tx)) = (node.on_click.clone(), cmd_tx) {
+                let tx = tx.clone();
+                div()
+                    .id(SharedString::from(path.to_string()))
+                    .test_support()
+                    .debug_selector(|| "clickable-static-label".into())
+                    .cursor_pointer()
+                    .child(label)
+                    .on_click(move |_, _, _| {
+                        let _ = tx.send(Cmd::Callback {
+                            id: id.clone(),
+                            value: None,
+                            seq: None,
+                        });
+                    })
+                    .into_any_element()
+            } else {
+                label.into_any_element()
+            }
+        }
         "nav-page" => chart_layout(v_flex().gap(px(node.gap.unwrap_or(8.))), node)
             .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx, cx)
+                paint_following_static_tree(
+                    child,
+                    &static_child_path(path, child_ix),
+                    cmd_tx,
+                    cx,
+                    follow,
+                )
             }))
             .into_any_element(),
         _ if !node.children.is_empty() => {
             chart_layout(v_flex().gap(px(node.gap.unwrap_or(8.))), node)
                 .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                    paint_static_tree(child, &static_child_path(path, child_ix), cmd_tx, cx)
+                    paint_following_static_tree(
+                        child,
+                        &static_child_path(path, child_ix),
+                        cmd_tx,
+                        cx,
+                        follow,
+                    )
                 }))
                 .into_any_element()
         }

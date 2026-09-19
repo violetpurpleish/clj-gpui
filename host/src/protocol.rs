@@ -45,6 +45,9 @@ pub struct StyledKeys {
     pub shadow: Option<bool>,
     pub align: Option<String>,
     pub justify: Option<String>,
+    /// Flex layout wrapping: wrap, wrap-reverse, or nowrap.
+    #[serde(default, rename = "flex-wrap")]
+    pub flex_wrap: Option<String>,
     pub width: Option<f32>,
     pub height: Option<f32>,
     pub size: Option<f32>,
@@ -79,6 +82,7 @@ impl StyledKeys {
             shadow: self.shadow.unwrap_or(false),
             align: self.align.clone(),
             justify: self.justify.clone(),
+            flex_wrap: self.flex_wrap.clone(),
             width: self.width,
             height: self.height,
             size: self.size,
@@ -1020,6 +1024,8 @@ pub struct Node {
     pub align: Option<String>,
     #[serde(default)]
     pub justify: Option<String>,
+    #[serde(default, rename = "flex-wrap")]
+    pub flex_wrap: Option<String>,
     #[serde(default)]
     pub gap: Option<f32>,
     #[serde(default)]
@@ -1564,6 +1570,10 @@ pub struct Node {
     /// both are set.
     #[serde(default, rename = "scroll-to-item")]
     pub scroll_to_item: Option<Value>,
+    /// Keep this descendant's rendered line at the top of MessageScroller.
+    /// Pair with scroll-to-item to realize its virtual row after a seek.
+    #[serde(default, rename = "follow-child")]
+    pub follow_child: Option<String>,
     /// MessageScroller: Kit `scroll_to_end` (resume tail follow).
     /// True applies; omitted / false leaves native scroll.
     #[serde(default, rename = "scroll-to-end")]

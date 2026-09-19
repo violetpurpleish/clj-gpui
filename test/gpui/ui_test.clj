@@ -1664,9 +1664,11 @@
     (let [exported (runtime/export-tree
                     (ui/message-scroller {:id "chat"
                                           :scroll-to-item "m2"
+                                          :follow-child :word-7
                                           :scroll-generation 1}
                                          (ui/message {:id "m2"} (ui/bubble "Hi"))))]
       (is (= "m2" (:scroll-to-item exported)))
+      (is (= "word-7" (:follow-child exported)))
       (is (= 1 (:scroll-generation exported))))
     (let [n (ui/message-scroller {:id "chat"
                                   :scroll-to-item " message-1 "}

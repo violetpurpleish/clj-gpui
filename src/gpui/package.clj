@@ -20,7 +20,9 @@
   an AppImage and a `.deb`. It never cross-compiles.
 
   LICENSE and NOTICE at the application repo root are copied into the
-  package. Extra files can be listed as `:license-files` in `gpui.edn`."
+  package. Extra files can be listed as `:license-files` in `gpui.edn`.
+  `:basis-aliases` selects deps.edn aliases for the packaged classpath, e.g.
+  platform-specific native libraries; it does not include build tooling."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]

@@ -315,6 +315,7 @@ for constructor shorthand details.
 | `jump-button-renderer` | object | `message-scroller`: Kit `with_jump_button_renderer` chrome (`text` / Clojure `:label` is Kit `Button::label`; also `variant`, `control-size`, `icon`, `tooltip`) |
 | `scroll-to-item` | string or number | `message-scroller`: Kit `scroll_to_item`. Opaque row id (not trimmed), or a 0-based index if no row has that id. Empty string / omitted / JSON null leaves native scroll. Applied after child-list sync. An unresolved or rejected item is not marked applied, so the same request can succeed after append/load. `:scroll-to-end true` wins when both are set |
 | `scroll-to-end` | bool | `message-scroller`: Kit `scroll_to_end` (resume tail follow). True applies; omitted / false leaves native scroll |
+| `follow-child` | string | `message-scroller`: keep a descendant's laid-out top at the viewport top using GPUI autoscroll. Pair with `scroll-to-item` and `scroll-generation` to realize its row on word changes/seeks. A virtual trailing spacer permits final-line alignment. Wrapping is measured natively. Use `list-style` padding 0 for exact top alignment. Omitted / nil disables following; `scroll-to-end true` takes precedence. |
 | `scroll-generation` | number or string | `message-scroller`: replay token for `scroll_to_item` / `scroll_to_end`. Same target with a new token re-applies after the user has scrolled away. Omitted still applies the first distinct target |
 | `header-groups` | array of arrays of `{label, span}` | `data-table`: Kit `TableDelegate::group_headers`. Each inner array is one header row. Empty / omitted is no groups |
 | `cell-selectable` | bool | `data-table`: Kit `TableState::cell_selectable`. Omitted is Kit false. `SelectColumn` is not forwarded as `:on-change` |
@@ -417,6 +418,7 @@ for constructor shorthand details.
 | `align` | string | `center`, `start`, `end`. Also `table-head` / `table-cell` text alignment (`end` / `right` → Kit `text_right`) |
 | `span` | number | `table-head` / `table-cell` Kit `col_span` (`0` / omitted is 1). Description-list item span stays on `items[]` |
 | `justify` | string | `center`, `end`, `between` |
+| `flex-wrap` | string | Flex child wrapping: `wrap`, `wrap-reverse`, or `nowrap` |
 | `gap`, `padding`, `width`, `height`, `size`, `flex` | number | layout / spacer |
 | `font-size` | number | text |
 | `font-family` | string | text (e.g. `.SystemUIFont`) |

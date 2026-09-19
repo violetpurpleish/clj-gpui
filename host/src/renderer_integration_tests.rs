@@ -99,6 +99,128 @@ fn settle_root(handle: WindowHandle<Root>, cx: &mut TestAppContext) {
     }
 }
 
+#[gpui_kit::test]
+async fn transcript_words_wrap_and_click_inside_virtual_scroller(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        syntax::init(cx);
+    });
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(300.), px(260.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let tree = |callback: &str| {
+        serde_json::from_value(json!({
+            "type": "window", "children": [{
+                "type": "message-scroller", "id": "transcript", "width": 220, "height": 180,
+                "scroll-to-item": "passage", "jump-button": false,
+                "children": [{"type": "hstack", "id": "passage", "flex-wrap": "wrap", "gap": 6,
+                    "children": [
+                        {"type": "label", "text": "Trust", "width": 100, "on-click": "first"},
+                        {"type": "label", "text": "your", "width": 100, "on-click": "second"},
+                        {"type": "label", "text": "partner", "width": 100, "on-click": callback}
+                    ]}]
+            }]
+        }))
+        .unwrap()
+    };
+    for callback in ["seek-old", "seek-current"] {
+        event_tx
+            .send(HostEvent::tree(tree(callback), None, vec![]))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        drain(&cmd_rx);
+        cx.update_window(handle.into(), |_, window, cx| {
+            let first = window.find("root-0.0/0").bounds();
+            let last = window.find("root-0.0/2").bounds();
+            assert!(
+                last.origin.y > first.origin.y,
+                "words must wrap at the scroller width"
+            );
+            window.click("root-0.0/2", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert!(
+            callback_pairs(&drain(&cmd_rx))
+                .iter()
+                .any(|(id, _)| id == callback)
+        );
+    }
+}
+
+#[gpui_kit::test]
+async fn transcript_follow_keeps_wrapped_line_at_top_after_seeks_and_resize(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        syntax::init(cx);
+    });
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(320.), px(260.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let tree = |passage: usize, word: usize, width: usize| {
+        let children: Vec<_> = (0..8)
+            .map(|p| {
+                let words: Vec<_> = (0..12).map(|w| json!({
+                "type": "label", "id": format!("word-{p}-{w}"), "text": format!("Word {w}"),
+                "width": 90, "height": 24, "on-click": format!("seek-{p}-{w}")
+            })).collect();
+                json!({"type": "hstack", "id": format!("passage-{p}"), "flex-wrap": "wrap",
+                   "gap": 6, "padding": 4, "children": words})
+            })
+            .collect();
+        serde_json::from_value(json!({"type": "window", "children": [{
+            "type": "message-scroller", "id": "transcript", "width": width, "height": 180,
+            "list-style": {"padding": 0}, "jump-button": false,
+            "scroll-to-item": format!("passage-{passage}"),
+            "scroll-generation": format!("{passage}-{word}"),
+            "follow-child": format!("word-{passage}-{word}"), "children": children
+        }]}))
+        .unwrap()
+    };
+    // Same line, next wrapped line, far forward, final line, backward, and reflow.
+    for (passage, word, width) in [
+        (0, 0, 240),
+        (0, 1, 240),
+        (0, 2, 240),
+        (5, 10, 240),
+        (7, 11, 240),
+        (2, 4, 240),
+        (2, 4, 160),
+    ] {
+        event_tx
+            .send(HostEvent::tree(tree(passage, word, width), None, vec![]))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        cx.update_window(handle.into(), |_, window, _| {
+            let current = window.find(gpui_kit::SharedString::from(format!("root-0.{passage}/{word}"))).bounds();
+            assert!(f32::from(current.origin.y).abs() < 1.,
+                    "line must start at the viewport top for {passage}/{word} at width {width}: {current:?}");
+        }).unwrap();
+    }
+    // The layout anchor must not intercept clicks on the followed word.
+    drain(&cmd_rx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.click("root-0.2/4", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(
+        callback_pairs(&drain(&cmd_rx))
+            .iter()
+            .any(|(id, _)| id == "seek-2-4")
+    );
+}
+
 fn controls_tree(checked: bool, switched: bool, reverse: bool) -> Node {
     let mut children = vec![
         json!({"type": "checkbox", "id": "agree", "text": "Agree",

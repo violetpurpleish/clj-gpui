@@ -750,7 +750,8 @@
 (defn hstack
   "Horizontal stack. Same optional style map convention as `vstack`.
   Use `:align :stretch` for columns that fill the stack's height, such as
-  a sidebar beside an independently scrolling content pane."
+  a sidebar beside an independently scrolling content pane.
+  `:flex-wrap \"wrap\"` wraps children at the available width."
   [& args]
   (let [[style children] (split-style-children args)]
     (assoc style :type :hstack :children (flatten-children children))))
@@ -2978,6 +2979,7 @@
                                  (number? item) item
                                  :else (wire-id item))))
       (keyword? (:scroll-generation opts)) (update :scroll-generation name)
+      (some? (:follow-child opts)) (update :follow-child wire-id)
       (some? (:stack-style opts)) (update :stack-style style-slot)
       (some? (:shimmer-style opts)) (update :shimmer-style style-slot)
       (some? (:separator-style opts)) (update :separator-style style-slot)
@@ -3376,7 +3378,11 @@
   after the user has scrolled away — same shape as nav-stack
   `:replace-generation`. An unresolved or rejected `:scroll-to-item`
   is not marked applied, so the same request can succeed after
-  append/load. Requests run after child-list sync. Kit's
+  append/load. Requests run after child-list sync. `:follow-child` is
+  a descendant id whose rendered line stays at the viewport top, including
+  after wrapping changes. Pair with `:scroll-to-item` to realize its row.
+  Following reserves a viewport of trailing space so the last line can
+  also reach the top. Omit it to allow ordinary manual scrolling. Kit's
   constructor takes an arbitrary row renderer (`IntoElement`); scroller
   rows here paint the static overlay subset plus this chat family
   (not list / data-table / editor) because they cannot re-enter

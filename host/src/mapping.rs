@@ -174,6 +174,13 @@ pub fn parse_hsla(value: &str) -> Option<Hsla> {
 /// wrap/clip (`truncate`, `whitespace`, `text-overflow`, `overflow`).
 /// Not box geometry (`:width` / `:height` / `:size` / `:flex`).
 pub fn apply_visual_style<E: Styled>(mut el: E, node: &Node) -> E {
+    if let Some(wrap) = node.flex_wrap.as_deref() {
+        el = match wrap {
+            "wrap" => el.flex_wrap(),
+            "wrap-reverse" => el.flex_wrap_reverse(),
+            _ => el.flex_nowrap(),
+        };
+    }
     if let Some(gap) = node.gap {
         el = el.gap(px(gap));
     }
@@ -429,6 +436,7 @@ pub fn has_styled_keys(style: &StyledKeys) -> bool {
         || style.shadow.is_some()
         || style.align.is_some()
         || style.justify.is_some()
+        || style.flex_wrap.is_some()
         || style.width.is_some()
         || style.height.is_some()
         || style.size.is_some()
@@ -447,6 +455,7 @@ pub fn has_styled_keys(style: &StyledKeys) -> bool {
 pub fn overlay_styled(base: &StyledKeys, over: &StyledKeys) -> StyledKeys {
     StyledKeys {
         gap: over.gap.or(base.gap),
+        flex_wrap: over.flex_wrap.clone().or_else(|| base.flex_wrap.clone()),
         padding: over.padding.or(base.padding),
         font_size: over.font_size.or(base.font_size),
         font_family: over
