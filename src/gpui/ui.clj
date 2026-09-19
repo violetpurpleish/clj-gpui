@@ -1254,7 +1254,7 @@
   `:menu-max-h` (px), `:search-placeholder`, `:empty` (string form of
   Kit `Select::empty`; Kit accepts arbitrary `IntoElement`), `:icon`,
   `:appearance`, `:focus-ring` (Kit `FocusableExt`; omit = Kit true),
-  `:accessibility-label`. Kit 0.6.1's styled Select does not forward its
+  `:accessibility-label`. Kit 0.6.4's styled Select does not forward its
   base dismiss event, so there is deliberately no `:on-dismiss`; selection
   confirmation remains distinct from merely closing the menu. Group titles are not selectable and are not
   in the callback id map. Custom row/section `render` is not wrapped.
@@ -2775,7 +2775,7 @@
 (defn pie-chart
   "See `chart` with `:pie`. `:inner-radius` makes a donut; `:labels true` draws slice labels.
   Per-slice `:inner-radius` / `:outer-radius` map to Kit `inner_radius_fn` / `outer_radius_fn`.
-  Omit slice `:color` to keep Kit `chart_2`. Omitted `:outer-radius` uses the chart height × 0.4 so the ring paints (Kit's layout default; Kit's paint path does not)."
+  Omit slice `:color` to keep Kit `chart_2`. Omitted `:outer-radius` uses Kit's laid-out chart height × 0.4. With partial per-slice radii, other slices use the node radius or declared/default viewport height × 0.4."
   ([points] (chart :pie points nil))
   ([points opts] (chart :pie points opts)))
 

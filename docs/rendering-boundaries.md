@@ -1,8 +1,10 @@
 # Rendering boundaries
 
-These findings apply to GPUI Kit / `gpui-component` 0.6.1 and `gpui-pre` 0.3.3,
-as pinned by `host/Cargo.lock`. They distinguish host mapping errors from
-upstream behavior; no dependency fork or application-specific renderer is used.
+These findings were recorded with GPUI Kit / `gpui-component` 0.6.1 and
+`gpui-pre` 0.3.3. The host now uses 0.6.4 / 0.3.5; the historical upstream
+reproductions below have not been revalidated unless noted. They distinguish
+host mapping errors from upstream behavior; no dependency fork or
+application-specific renderer is used.
 
 ## Image sources: clj-gpui
 
