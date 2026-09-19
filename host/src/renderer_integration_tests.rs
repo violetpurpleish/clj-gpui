@@ -247,6 +247,57 @@ fn transcript_word_y(handle: WindowHandle<Root>, cx: &mut TestAppContext, word: 
 }
 
 #[gpui_kit::test]
+async fn transcript_word_click_waits_for_the_current_playback_callback_registry(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        syntax::init(cx);
+    });
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(320.), px(260.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let tree = |callback: &str| {
+        let mut tree = transcript_follow_tree(2, 4, 240, 0);
+        tree.children[0].follow_child = Some("passage-2".into());
+        tree.children[0].children[2].children[4].on_click = Some(callback.into());
+        tree
+    };
+    event_tx
+        .send(HostEvent::tree(tree("seek-stale"), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    drain(&cmd_rx);
+    // Playback replaces Clojure's registry while a large transcript snapshot
+    // is still travelling to the native host. The visible labels are stale.
+    event_tx.send(HostEvent::RenderRequested).await.unwrap();
+    cx.run_until_parked();
+    drain(&cmd_rx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.click("root-0.2/4", cx)
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(
+        callback_pairs(&drain(&cmd_rx)).is_empty(),
+        "must not send a retired callback ID"
+    );
+    event_tx
+        .send(HostEvent::tree(tree("seek-current"), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        callback_pairs(&drain(&cmd_rx)),
+        vec![("seek-current".into(), None)]
+    );
+}
+
+#[gpui_kit::test]
 async fn transcript_can_follow_whole_paragraphs_without_moving_between_words(
     cx: &mut TestAppContext,
 ) {

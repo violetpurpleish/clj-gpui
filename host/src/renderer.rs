@@ -5144,6 +5144,11 @@ impl RootView {
             viewport_height: follow_viewport_height,
             state: slot.state.clone(),
         });
+        let scroller_context = overlay::ScrollerPaintContext {
+            key: key.to_string(),
+            emit: Self::action_emitter(cx),
+            follow,
+        };
         let items = slot.items.clone();
         let cmd_tx = self.cmd_tx.clone();
         let row_path = path.to_string();
@@ -5158,7 +5163,7 @@ impl RootView {
                         &format!("{row_path}.{index}"),
                         &cmd_tx,
                         cx,
-                        follow.as_ref(),
+                        &scroller_context,
                     ),
                     None => div().into_any_element(),
                 }

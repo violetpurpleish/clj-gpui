@@ -330,7 +330,7 @@ pub fn latest_dialog_spec(live: &RefCell<Vec<DialogSpec>>, key: &str) -> Option<
     live.borrow().iter().find(|spec| spec.key == key).cloned()
 }
 
-/// Queued native button/overlay handlers carry identity/intent, never callback ids.
+/// Queued native handlers carry identity/intent, never callback ids.
 /// Resolve against the installed tree immediately before sending the existing
 /// Callback/CallbackBatch command. A queued round-trip must finish before
 /// the next action can use the replacement callback registry.
@@ -338,6 +338,11 @@ pub fn latest_dialog_spec(live: &RefCell<Vec<DialogSpec>>, key: &str) -> Option<
 pub enum QueuedAction {
     ButtonClick {
         key: String,
+    },
+    /// A named label inside one scroller; never reuse an ID from another episode.
+    ScrollerLabelClick {
+        key: String,
+        label: String,
     },
     SliderGesture {
         key: String,
@@ -549,8 +554,29 @@ impl CallbackQueue {
 
 impl QueuedAction {
     fn resolve(&self, tree: &Node) -> Vec<protocol::CallbackCall> {
+        if let Self::ScrollerLabelClick { key, label } = self {
+            let mut callback = None;
+            walk_nodes(tree, "root", &mut |node, path| {
+                if node.kind == "message-scroller" && node_key(node, path) == *key {
+                    walk_nodes(node, path, &mut |child, _| {
+                        if callback.is_none()
+                            && child.kind == "label"
+                            && !child.disabled
+                            && child.id.as_deref() == Some(label.as_str())
+                        {
+                            callback = child.on_click.clone();
+                        }
+                    });
+                }
+            });
+            return callback
+                .map(protocol::CallbackCall::fire)
+                .into_iter()
+                .collect();
+        }
         let key = match self {
             Self::ButtonClick { key }
+            | Self::ScrollerLabelClick { key, .. }
             | Self::SliderGesture { key, .. }
             | Self::DialogClose { key, .. }
             | Self::PopoverOpen { key, .. }
@@ -565,6 +591,7 @@ impl QueuedAction {
         walk_nodes(tree, "root", &mut |node, path| {
             let kind_matches = match self {
                 Self::ButtonClick { .. } => node.kind == "button",
+                Self::ScrollerLabelClick { .. } => false, // resolved in its scroller above
                 Self::SliderGesture { .. } => node.kind == "slider",
                 Self::DialogClose { .. } => is_dialog_kind(&node.kind),
                 Self::PopoverOpen { .. } => matches!(node.kind.as_str(), "popover" | "native-menu"),
@@ -827,12 +854,12 @@ fn chart_host(child: impl IntoElement, node: &Node, path: &str) -> gpui::AnyElem
 struct ChartPaint<'a> {
     cmd_tx: Option<&'a mpsc::Sender<Cmd>>,
     cx: Option<&'a App>,
-    follow: Option<&'a ScrollerFollow>,
+    scroller: Option<&'a ScrollerPaintContext>,
 }
 
 impl crate::chat::NodePainter for ChartPaint<'_> {
     fn paint_node(&mut self, node: &Node, path: &str) -> gpui::AnyElement {
-        paint_following_static_tree(node, path, self.cmd_tx, self.cx, self.follow)
+        paint_following_static_tree(node, path, self.cmd_tx, self.cx, self.scroller)
     }
 
     fn cmd_tx(&self) -> Option<mpsc::Sender<Cmd>> {
@@ -878,14 +905,20 @@ pub(crate) struct ScrollerFollow {
     pub state: gpui::Entity<gpui_component::message_scroller::MessageScrollerState>,
 }
 
+pub(crate) struct ScrollerPaintContext {
+    pub key: String,
+    pub emit: ActionEmitter,
+    pub follow: Option<ScrollerFollow>,
+}
+
 pub(crate) fn paint_following_scroller_tree(
     node: &Node,
     path: &str,
     cmd_tx: &mpsc::Sender<Cmd>,
     cx: &App,
-    follow: Option<&ScrollerFollow>,
+    scroller: &ScrollerPaintContext,
 ) -> gpui::AnyElement {
-    paint_following_static_tree(node, path, Some(cmd_tx), Some(cx), follow)
+    paint_following_static_tree(node, path, Some(cmd_tx), Some(cx), Some(scroller))
 }
 
 fn paint_static_tree(
@@ -902,10 +935,13 @@ fn paint_following_static_tree(
     path: &str,
     cmd_tx: Option<&mpsc::Sender<Cmd>>,
     cx: Option<&App>,
-    follow: Option<&ScrollerFollow>,
+    scroller: Option<&ScrollerPaintContext>,
 ) -> gpui::AnyElement {
-    let content = paint_static_contents(node, path, cmd_tx, cx, follow);
-    let Some(follow) = follow.filter(|follow| node.id.as_deref() == Some(&follow.target)) else {
+    let content = paint_static_contents(node, path, cmd_tx, cx, scroller);
+    let Some(follow) = scroller
+        .and_then(|context| context.follow.as_ref())
+        .filter(|follow| node.id.as_deref() == Some(&follow.target))
+    else {
         return content;
     };
     let follow = follow.clone();
@@ -949,10 +985,18 @@ fn paint_static_contents(
     path: &str,
     cmd_tx: Option<&mpsc::Sender<Cmd>>,
     cx: Option<&App>,
-    follow: Option<&ScrollerFollow>,
+    scroller: Option<&ScrollerPaintContext>,
 ) -> gpui::AnyElement {
     if chat::is_chat_kind(&node.kind) {
-        return chat::render_any(&mut ChartPaint { cmd_tx, cx, follow }, node, path);
+        return chat::render_any(
+            &mut ChartPaint {
+                cmd_tx,
+                cx,
+                scroller,
+            },
+            node,
+            path,
+        );
     }
     match node.kind.as_str() {
         "button" => {
@@ -980,7 +1024,7 @@ fn paint_static_contents(
                     &static_child_path(path, child_ix),
                     cmd_tx,
                     cx,
-                    follow,
+                    scroller,
                 )
             }))
             .into_any_element(),
@@ -991,7 +1035,7 @@ fn paint_static_contents(
                     &static_child_path(path, child_ix),
                     cmd_tx,
                     cx,
-                    follow,
+                    scroller,
                 )
             }))
             .into_any_element(),
@@ -1086,7 +1130,7 @@ fn paint_static_contents(
                     &static_child_path(path, child_ix),
                     cmd_tx,
                     cx,
-                    follow,
+                    scroller,
                 )
             }));
             chart_host(badge, &mapping::badge_host_node(node), path)
@@ -1148,7 +1192,7 @@ fn paint_static_contents(
                         &static_child_path(path, child_ix),
                         cmd_tx,
                         cx,
-                        follow,
+                        scroller,
                     )
                 })),
                 node,
@@ -1221,7 +1265,7 @@ fn paint_static_contents(
                         &static_child_path(path, child_ix),
                         cmd_tx,
                         cx,
-                        follow,
+                        scroller,
                     )
                 }))
                 .into_any_element()
@@ -1230,18 +1274,33 @@ fn paint_static_contents(
             let label = chart_layout(mapping::kit_label(node), node);
             if let (Some(id), Some(tx)) = (node.on_click.clone(), cmd_tx) {
                 let tx = tx.clone();
+                let action = scroller
+                    .zip(node.id.as_ref().filter(|id| !id.is_empty()))
+                    .map(|(context, label)| {
+                        (
+                            context.emit.clone(),
+                            QueuedAction::ScrollerLabelClick {
+                                key: context.key.clone(),
+                                label: label.clone(),
+                            },
+                        )
+                    });
                 div()
                     .id(SharedString::from(path.to_string()))
                     .test_support()
                     .debug_selector(|| "clickable-static-label".into())
                     .cursor_pointer()
                     .child(label)
-                    .on_click(move |_, _, _| {
-                        let _ = tx.send(Cmd::Callback {
-                            id: id.clone(),
-                            value: None,
-                            seq: None,
-                        });
+                    .on_click(move |_, _, cx| {
+                        if let Some((emit, action)) = &action {
+                            emit(action.clone(), cx);
+                        } else {
+                            let _ = tx.send(Cmd::Callback {
+                                id: id.clone(),
+                                value: None,
+                                seq: None,
+                            });
+                        }
                     })
                     .into_any_element()
             } else {
@@ -1255,7 +1314,7 @@ fn paint_static_contents(
                     &static_child_path(path, child_ix),
                     cmd_tx,
                     cx,
-                    follow,
+                    scroller,
                 )
             }))
             .into_any_element(),
@@ -1267,7 +1326,7 @@ fn paint_static_contents(
                         &static_child_path(path, child_ix),
                         cmd_tx,
                         cx,
-                        follow,
+                        scroller,
                     )
                 }))
                 .into_any_element()
@@ -2364,6 +2423,88 @@ mod tests {
                 key: "position".into(),
                 value: json!(830.0),
             })
+        );
+    }
+
+    #[test]
+    fn scroller_label_clicks_wait_for_refreshes_and_each_seek_acknowledgement() {
+        let tree = |generation: &str| {
+            node(
+                json!({"type": "message-scroller", "id": "episode-a", "children": [{
+                    "type": "hstack", "id": "paragraph", "children": [
+                        {"type": "label", "id": "word-4200", "on-click": format!("{generation}-4200")},
+                        {"type": "label", "id": "word-5200", "on-click": format!("{generation}-5200")}
+                    ]
+                }]}),
+            )
+        };
+        let mut queue = CallbackQueue::default();
+        queue.render_requested();
+        queue.render_requested();
+        for label in ["word-4200", "word-5200"] {
+            queue.push(QueuedAction::ScrollerLabelClick {
+                key: "episode-a".into(),
+                label: label.into(),
+            });
+        }
+        assert!(queue.next(&tree("stale")).is_none());
+        queue.tree_installed(None);
+        assert!(queue.next(&tree("intermediate")).is_none());
+        queue.tree_installed(None);
+        assert_eq!(
+            queue.next(&tree("current")).unwrap(),
+            vec![protocol::CallbackCall::fire("current-4200")]
+        );
+        queue.sent(7);
+        // A playback snapshot cannot acknowledge the first seek. The second
+        // click waits for its callback response and uses that new registry.
+        queue.tree_installed(None);
+        queue.tree_installed(Some(6));
+        assert!(queue.next(&tree("still-in-flight")).is_none());
+        queue.tree_installed(Some(7));
+        assert_eq!(
+            queue.next(&tree("after-seek")).unwrap(),
+            vec![protocol::CallbackCall::fire("after-seek-5200")]
+        );
+        assert!(queue.next(&tree("after-seek")).is_none());
+    }
+
+    #[test]
+    fn scroller_label_clicks_stay_scoped_to_the_original_episode() {
+        let other_episode = json!({"type": "message-scroller", "id": "episode-b", "children": [
+            {"type": "label", "id": "word-4200", "on-click": "wrong-episode"}
+        ]});
+        let tree = |label: Value| {
+            node(json!({"type": "window", "children": [other_episode, {
+                "type": "message-scroller", "id": "episode-a", "children": [
+                    {"type": "hstack", "children": [label]}
+                ]
+            }]}))
+        };
+        let action = QueuedAction::ScrollerLabelClick {
+            key: "episode-a".into(),
+            label: "word-4200".into(),
+        };
+        assert_eq!(
+            action.resolve(&tree(
+                json!({"type": "label", "id": "word-4200", "on-click": "seek-a"})
+            )),
+            vec![protocol::CallbackCall::fire("seek-a")]
+        );
+        for unavailable in [
+            json!({"type": "label", "id": "word-4201", "on-click": "different-word"}),
+            json!({"type": "label", "id": "word-4200", "disabled": true, "on-click": "disabled"}),
+            json!({"type": "label", "id": "word-4200"}),
+        ] {
+            assert!(action.resolve(&tree(unavailable)).is_empty());
+        }
+        let mut queue = CallbackQueue::default();
+        queue.render_requested();
+        queue.push(action);
+        queue.tree_installed(None);
+        assert!(
+            queue.next(&node(other_episode)).is_none(),
+            "switching episodes must drop the old click even if the word ID is reused"
         );
     }
 
