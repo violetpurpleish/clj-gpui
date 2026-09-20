@@ -33,7 +33,9 @@ impl RegistryPeer {
              "on-close": self.id("close"), "on-open-change": self.id("dialog-open"),
              "children": [
                 {"type": "label", "text": "Really?"},
-                {"type": "button", "text": "Save", "on-click": self.id("dialog-save")}
+                {"type": "button", "text": "Save", "on-click": self.id("dialog-save")},
+                {"type": "input", "id": "url", "on-change": self.id("url-change"),
+                 "on-submit": self.id("url-submit"), "on-blur": self.id("url-blur")}
              ]},
             {"type": "popover", "id": "hint", "open": self.popover_open,
              "on-open-change": self.id("popover-open"),
@@ -239,6 +241,50 @@ fn dialog_then_popover_waits_for_generation_and_suppresses_native_echoes() {
             ("close".into(), Value::Null, true),
             ("dialog-open".into(), json!(false), true),
             ("popover-open".into(), json!(true), false),
+        ]
+    );
+}
+
+#[test]
+fn dialog_typing_and_submit_wait_for_current_callback_registry() {
+    use crate::overlay::DialogInputEvent;
+    let fixture = Fixture::new();
+    let tree_a = fixture.initial_tree();
+    let mut queue = CallbackQueue::default();
+    let input = |event, value: &str, revision| QueuedAction::DialogInput {
+        key: "dialog-input/3:ask/id/3:url".into(),
+        event,
+        value: value.into(),
+        revision,
+    };
+    queue.push(input(DialogInputEvent::Change, "h", 1));
+    fixture.send(&mut queue, &tree_a, 1);
+    queue.push(input(DialogInputEvent::Change, "http", 2));
+    queue.push(input(DialogInputEvent::Change, "https://example.com", 3));
+    queue.push(input(DialogInputEvent::Submit, "https://example.com", 4));
+    assert!(queue.next(&tree_a).is_none());
+    let (tree_b, seq) = fixture.tree();
+    queue.tree_installed(seq);
+    fixture.send(&mut queue, &tree_b, 2);
+    let (tree_c, seq) = fixture.tree();
+    queue.tree_installed(seq);
+    // An independent render also replaces the registry before submit can run.
+    queue.render_requested();
+    fixture.host.cmd_tx.send(Cmd::Render).unwrap();
+    assert!(queue.next(&tree_c).is_none());
+    let (tree_d, seq) = fixture.tree();
+    queue.tree_installed(seq);
+    fixture.send(&mut queue, &tree_d, 3);
+    let (_, seq) = fixture.tree();
+    queue.tree_installed(seq);
+    let peer = fixture.peer.lock().unwrap();
+    assert!(peer.unknown.is_empty());
+    assert_eq!(
+        peer.fired,
+        vec![
+            ("url-change".into(), json!("h"), false),
+            ("url-change".into(), json!("https://example.com"), false),
+            ("url-submit".into(), json!("https://example.com"), false),
         ]
     );
 }

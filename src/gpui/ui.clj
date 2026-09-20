@@ -746,6 +746,8 @@
   position in pixels. Omission keeps Kit's default. Native titlebar
   selection and this position are chosen at startup; restart to change them.
   The window's `:title` remains the native title and may change live.
+  If rendering fails, the host keeps a titlebar above the error content so
+  native window controls do not cover the diagnostic message.
 
   (ui/title-bar (ui/label \"My app\"))
   (ui/title-bar {:height 56 :traffic-light-position [10 19]}
@@ -1719,6 +1721,15 @@
   `:ok-text` / `:cancel-text` and named `:ok-variant` / `:cancel-variant`
   are Kit `DialogButtonProps`. `:close-button` (omit = Kit true) and
   `:keyboard` (Escape; omit = Kit true) are Kit Dialog chrome.
+
+  Children may include `ui/input`, including inside stacks. Inputs keep
+  native editing state and use the same callbacks/chrome as in-tree inputs.
+  Give each input a stable `:id`; identities are scoped to this dialog.
+  `:focus true` requests focus after the dialog opens. Closing releases its
+  input state and restores the previous focus. An input with `:on-submit`
+  handles Enter without automatically confirming/closing the dialog.
+  Other stateful controls are
+  not yet supported in dialog content.
 
   (ui/dialog open?
     {:title \"Delete?\" :variant :confirm :ok-text \"Delete\"

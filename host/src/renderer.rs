@@ -85,6 +85,13 @@ use std::time::Duration;
 
 struct InputSlot {
     state: Entity<InputState>,
+    /// Dialog events share the overlay generation barrier. Revision latches
+    /// prevent an older change response from replacing newer native typing.
+    dialog_revision: Option<u64>,
+    dialog_ack_revision: u64,
+    dialog_echo: Option<(u64, u64)>,
+    dialog_submit_pending: bool,
+    dialog_last_value: String,
     on_change: Option<String>,
     on_submit: Option<String>,
     on_blur: Option<String>,
@@ -496,6 +503,9 @@ struct TreeOverlays {
 
 pub struct RootView {
     tree: Option<Rc<Node>>,
+    /// Native titlebar mode is chosen at startup. Retain its geometry when a
+    /// later error replaces the application tree with a diagnostic view.
+    custom_title_bar: Option<Node>,
     tree_revision: u64,
     tree_overlays: TreeOverlays,
     status: String,
@@ -526,6 +536,7 @@ pub struct RootView {
     used_resizables: HashSet<String>,
     dialogs: Vec<overlay::DialogSpec>,
     dialog_live: Rc<RefCell<Vec<overlay::DialogSpec>>>,
+    dialog_inputs: Rc<RefCell<overlay::OverlayInputs>>,
     dialog_keys: Vec<String>,
     dialog_pending: bool,
     callback_queue: overlay::CallbackQueue,
@@ -772,6 +783,13 @@ impl RootView {
                             view.status = format!("nREPL 127.0.0.1:{nrepl_port} · connected");
                         }
                         HostEvent::Tree(tree, seq, themes) => {
+                            if view.tree.is_none() {
+                                view.custom_title_bar = direct_title_bar(&tree).cloned();
+                            } else if view.custom_title_bar.is_some()
+                                && let Some(bar) = direct_title_bar(&tree)
+                            {
+                                view.custom_title_bar = Some(bar.clone());
+                            }
                             catalog::install_clojure_sets(themes);
                             overlay::acknowledge_dialog_tree(&mut view.dialog_keys, &tree);
                             view.tree_overlays = TreeOverlays {
@@ -801,6 +819,9 @@ impl RootView {
                                 slot.wait_for_seq = None;
                                 slot.submitted = None;
                                 slot.change.clear();
+                                slot.dialog_echo = None;
+                                slot.dialog_ack_revision = slot.dialog_revision.unwrap_or(0);
+                                slot.dialog_submit_pending = false;
                             }
                             for slot in view.textareas.values_mut() {
                                 slot.wait_for_seq = None;
@@ -836,6 +857,7 @@ impl RootView {
         }
         Self {
             tree: None,
+            custom_title_bar: None,
             tree_revision: 0,
             tree_overlays: TreeOverlays::default(),
             status: format!("nREPL 127.0.0.1:{nrepl_port} · loading Clojure UI"),
@@ -864,6 +886,7 @@ impl RootView {
             used_resizables: HashSet::new(),
             dialogs: Vec::new(),
             dialog_live: Rc::new(RefCell::new(Vec::new())),
+            dialog_inputs: Rc::new(RefCell::new(HashMap::new())),
             dialog_keys: Vec::new(),
             dialog_pending: false,
             callback_queue: overlay::CallbackQueue::default(),
@@ -950,7 +973,17 @@ impl RootView {
         }
     }
 
-    fn handle_escape(&self, window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let dialog_key = self.inputs.iter().find_map(|(key, slot)| {
+            (slot.dialog_revision.is_some()
+                && slot.on_escape.is_some()
+                && slot.state.read(cx).focus_handle(cx).is_focused(window))
+            .then(|| key.clone())
+        });
+        if let Some(key) = dialog_key {
+            self.queue_dialog_input(&key, overlay::DialogInputEvent::Escape, String::new());
+            return;
+        }
         let focused = self
             .inputs
             .values()
@@ -1132,7 +1165,45 @@ impl RootView {
         // queued CommandQuery/CommandSelect would render without a latch.
         self.install_command_echo_latch(seq, outbound.command_echo);
         self.install_slider_echo_latch(seq, outbound.slider_echo);
+        if let Some(echo) = outbound.input_echo
+            && let Some(slot) = self.inputs.get_mut(&echo.key)
+        {
+            slot.dialog_echo = Some((seq, echo.revision));
+        }
         Some(seq)
+    }
+
+    fn queue_dialog_input(&mut self, key: &str, event: overlay::DialogInputEvent, value: String) {
+        use overlay::DialogInputEvent;
+        let Some(slot) = self.inputs.get_mut(key) else {
+            return;
+        };
+        let has_callback = match event {
+            DialogInputEvent::Change => slot.on_change.is_some(),
+            DialogInputEvent::Submit => slot.on_submit.is_some(),
+            DialogInputEvent::Blur => slot.on_blur.is_some(),
+            DialogInputEvent::Escape => slot.on_escape.is_some(),
+        };
+        if !has_callback || slot.dialog_submit_pending {
+            return;
+        }
+        if event == DialogInputEvent::Change && slot.dialog_last_value == value {
+            return;
+        }
+        slot.dialog_last_value = value.clone();
+        let Some(revision) = slot.dialog_revision.as_mut() else {
+            return;
+        };
+        *revision += 1;
+        slot.dialog_submit_pending = event == DialogInputEvent::Submit;
+        self.callback_queue
+            .push(overlay::QueuedAction::DialogInput {
+                key: key.to_string(),
+                event,
+                value,
+                revision: *revision,
+            });
+        self.flush_callback_queue();
     }
 
     fn install_slider_echo_latch(&mut self, seq: u64, echo: Option<overlay::SliderEcho>) {
@@ -1277,15 +1348,33 @@ impl RootView {
             slot.number_step = None;
             let refresh = id_changed && slot.change.on_ids_refreshed();
             let state = slot.state.clone();
-            let force = matches!(
+            let mut force = matches!(
                 (slot.wait_for_seq, self.tree_seq),
                 (Some(wait), Some(seq)) if wait == seq
             );
+            if let Some((seq, revision)) = slot.dialog_echo
+                && self.tree_seq == Some(seq)
+            {
+                slot.dialog_echo = None;
+                slot.dialog_ack_revision = revision;
+                if slot.dialog_revision == Some(revision) {
+                    force = true;
+                    slot.dialog_submit_pending = false;
+                }
+            }
+            let dialog_pending = slot
+                .dialog_revision
+                .is_some_and(|revision| revision > slot.dialog_ack_revision);
             let focused = state.read(cx).focus_handle(cx).is_focused(window);
             let desired = node.text.clone().unwrap_or_default();
             let current = state.read(cx).value().to_string();
-            if current != desired && (force || (!focused && slot.wait_for_seq.is_none())) {
+            if current != desired
+                && (force || (!focused && slot.wait_for_seq.is_none() && !dialog_pending))
+            {
                 let desired = desired.clone();
+                if slot.dialog_revision.is_some() {
+                    slot.dialog_last_value = desired.clone();
+                }
                 state.update(cx, |input, cx| {
                     input.set_value(desired, window, cx);
                 });
@@ -1332,6 +1421,11 @@ impl RootView {
             key.to_string(),
             InputSlot {
                 state: state.clone(),
+                dialog_revision: None,
+                dialog_ack_revision: 0,
+                dialog_echo: None,
+                dialog_submit_pending: false,
+                dialog_last_value: node.text.clone().unwrap_or_default(),
                 on_change: node.on_change.clone(),
                 on_submit: node.on_submit.clone(),
                 on_blur: node.on_blur.clone(),
@@ -1353,96 +1447,119 @@ impl RootView {
         cx.subscribe_in(
             &state,
             window,
-            move |this, input, event: &InputEvent, window, cx| match event {
-                InputEvent::Change => {
-                    let Some(slot) = this.inputs.get_mut(&key_owned) else {
-                        return;
+            move |this, input, event: &InputEvent, window, cx| {
+                if this
+                    .inputs
+                    .get(&key_owned)
+                    .is_some_and(|slot| slot.dialog_revision.is_some())
+                {
+                    let event = match event {
+                        InputEvent::Change => Some(overlay::DialogInputEvent::Change),
+                        InputEvent::PressEnter { .. } => Some(overlay::DialogInputEvent::Submit),
+                        InputEvent::Blur => Some(overlay::DialogInputEvent::Blur),
+                        _ => None,
                     };
-                    if slot.wait_for_seq.is_some() {
-                        return;
-                    }
-                    let value = input.read(cx).value().to_string();
-                    if slot.submitted.as_ref() == Some(&value) {
-                        return;
-                    }
-                    slot.submitted = None;
-                    if slot.change.on_change(value) {
-                        Self::schedule_input_change_flush(
-                            key_owned.clone(),
-                            TextFlush::Input,
-                            window,
-                            cx,
+                    if let Some(event) = event {
+                        this.queue_dialog_input(
+                            &key_owned,
+                            event,
+                            input.read(cx).value().to_string(),
                         );
                     }
+                    return;
                 }
-                InputEvent::PressEnter { .. } => {
-                    this.next_submit_seq = this.next_submit_seq.saturating_add(1);
-                    let seq = this.next_submit_seq;
-                    let (on_submit, value, state, clear, as_number) = {
+                match event {
+                    InputEvent::Change => {
                         let Some(slot) = this.inputs.get_mut(&key_owned) else {
                             return;
                         };
+                        if slot.wait_for_seq.is_some() {
+                            return;
+                        }
                         let value = input.read(cx).value().to_string();
-                        slot.wait_for_seq = Some(seq);
-                        slot.submitted = Some(value.clone());
-                        let clear =
-                            !slot.as_number && slot.on_blur.is_none() && slot.on_escape.is_none();
-                        (
-                            slot.on_submit.clone(),
-                            value,
-                            slot.state.clone(),
-                            clear,
-                            slot.as_number,
-                        )
-                    };
-                    if let Some(id) = on_submit {
+                        if slot.submitted.as_ref() == Some(&value) {
+                            return;
+                        }
+                        slot.submitted = None;
+                        if slot.change.on_change(value) {
+                            Self::schedule_input_change_flush(
+                                key_owned.clone(),
+                                TextFlush::Input,
+                                window,
+                                cx,
+                            );
+                        }
+                    }
+                    InputEvent::PressEnter { .. } => {
+                        this.next_submit_seq = this.next_submit_seq.saturating_add(1);
+                        let seq = this.next_submit_seq;
+                        let (on_submit, value, state, clear, as_number) = {
+                            let Some(slot) = this.inputs.get_mut(&key_owned) else {
+                                return;
+                            };
+                            let value = input.read(cx).value().to_string();
+                            slot.wait_for_seq = Some(seq);
+                            slot.submitted = Some(value.clone());
+                            let clear = !slot.as_number
+                                && slot.on_blur.is_none()
+                                && slot.on_escape.is_none();
+                            (
+                                slot.on_submit.clone(),
+                                value,
+                                slot.state.clone(),
+                                clear,
+                                slot.as_number,
+                            )
+                        };
+                        if let Some(id) = on_submit {
+                            let payload = if as_number {
+                                extra::number_from_input(&value)
+                                    .map(|n| json!(n))
+                                    .unwrap_or_else(|| json!(value.clone()))
+                            } else {
+                                json!(value.clone())
+                            };
+                            let _ = this.cmd_tx.send(Cmd::Callback {
+                                id,
+                                value: Some(payload),
+                                seq: Some(seq),
+                            });
+                        }
+                        // Compose fields (no blur/escape handlers) clear immediately so a
+                        // stale render cannot put the text back before Clojure's tree arrives.
+                        if clear {
+                            state.update(cx, |input, cx| {
+                                input.set_value("", window, cx);
+                            });
+                        }
+                    }
+                    InputEvent::Blur => {
+                        let Some(slot) = this.inputs.get(&key_owned) else {
+                            return;
+                        };
+                        if slot.wait_for_seq.is_some() {
+                            return;
+                        }
+                        let Some(id) = slot.on_blur.clone() else {
+                            return;
+                        };
+                        let as_number = slot.as_number;
+                        let value = input.read(cx).value().to_string();
                         let payload = if as_number {
                             extra::number_from_input(&value)
                                 .map(|n| json!(n))
-                                .unwrap_or_else(|| json!(value.clone()))
+                                .unwrap_or_else(|| json!(value))
                         } else {
-                            json!(value.clone())
+                            json!(value)
                         };
                         let _ = this.cmd_tx.send(Cmd::Callback {
                             id,
                             value: Some(payload),
-                            seq: Some(seq),
+                            seq: None,
                         });
                     }
-                    // Compose fields (no blur/escape handlers) clear immediately so a
-                    // stale render cannot put the text back before Clojure's tree arrives.
-                    if clear {
-                        state.update(cx, |input, cx| {
-                            input.set_value("", window, cx);
-                        });
-                    }
+                    _ => {}
                 }
-                InputEvent::Blur => {
-                    let Some(slot) = this.inputs.get(&key_owned) else {
-                        return;
-                    };
-                    if slot.wait_for_seq.is_some() {
-                        return;
-                    }
-                    let Some(id) = slot.on_blur.clone() else {
-                        return;
-                    };
-                    let as_number = slot.as_number;
-                    let value = input.read(cx).value().to_string();
-                    let payload = if as_number {
-                        extra::number_from_input(&value)
-                            .map(|n| json!(n))
-                            .unwrap_or_else(|| json!(value))
-                    } else {
-                        json!(value)
-                    };
-                    let _ = this.cmd_tx.send(Cmd::Callback {
-                        id,
-                        value: Some(payload),
-                        seq: None,
-                    });
-                }
-                _ => {}
             },
         )
         .detach();
@@ -4048,6 +4165,29 @@ impl RootView {
         });
     }
 
+    fn sync_dialog_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut inputs = HashMap::new();
+        let crate_open = window.has_active_dialog(cx);
+        for spec in self.tree_overlays.dialogs.clone() {
+            for (path, mut node) in
+                overlay::dialog_inputs(&spec.node.children, &format!("{}/content", spec.key))
+            {
+                let key = overlay::dialog_input_key(&spec.key, &node, &path);
+                // Root must capture the previous focus before an overlay input
+                // takes it. The post-open repaint applies the requested focus.
+                node.focus &= crate_open && self.dialog_keys.last() == Some(&spec.key);
+                let state = self.input_slot(&key, &node, window, cx);
+                self.inputs
+                    .get_mut(&key)
+                    .unwrap()
+                    .dialog_revision
+                    .get_or_insert(0);
+                inputs.insert(path, state);
+            }
+        }
+        *self.dialog_inputs.borrow_mut() = inputs;
+    }
+
     fn sync_dialogs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let wanted = self.tree_overlays.dialogs.clone();
         let wanted_keys = overlay::dialog_keys(&wanted);
@@ -4073,14 +4213,15 @@ impl RootView {
         let emit = Self::action_emitter(cx);
         window.on_next_frame(move |window, cx| {
             window.close_all_dialogs(cx);
-            let (keys, live) = entity.update(cx, |this, _| {
+            let (keys, live, inputs) = entity.update(cx, |this, _| {
                 this.dialog_pending = false;
                 let keys = overlay::dialog_keys(&this.dialogs);
                 this.dialog_keys = keys.clone();
-                (keys, this.dialog_live.clone())
+                (keys, this.dialog_live.clone(), this.dialog_inputs.clone())
             });
             for key in keys {
                 let live = live.clone();
+                let inputs = inputs.clone();
                 let emit = emit.clone();
                 let is_alert = live
                     .borrow()
@@ -4091,14 +4232,20 @@ impl RootView {
                         let Some(spec) = overlay::latest_dialog_spec(&live, &key) else {
                             return alert;
                         };
-                        let children = vec![overlay::paint_static(
+                        let children = vec![overlay::paint_static_with_inputs(
                             &spec.node.children,
                             emit.clone(),
                             &format!("{}/content", spec.key),
                             Some(cx),
+                            &inputs.borrow(),
                         )];
                         let alert = overlay::configure_alert_dialog(alert, &spec.node, children);
-                        overlay::bind_alert_dialog_callbacks(alert, key.clone(), emit.clone())
+                        overlay::bind_alert_dialog_callbacks(
+                            alert,
+                            key.clone(),
+                            emit.clone(),
+                            overlay::dialog_submit_inputs(&spec, &inputs.borrow()),
+                        )
                     });
                 } else {
                     let close = Rc::new(RefCell::new(overlay::DialogClose::default()));
@@ -4106,11 +4253,12 @@ impl RootView {
                         let Some(spec) = overlay::latest_dialog_spec(&live, &key) else {
                             return dialog;
                         };
-                        let children = vec![overlay::paint_static(
+                        let children = vec![overlay::paint_static_with_inputs(
                             &spec.node.children,
                             emit.clone(),
                             &format!("{}/content", spec.key),
                             Some(cx),
+                            &inputs.borrow(),
                         )];
                         let dialog = overlay::configure_dialog(dialog, &spec.node, children);
                         overlay::bind_dialog_callbacks(
@@ -4118,6 +4266,7 @@ impl RootView {
                             key.clone(),
                             emit.clone(),
                             close.clone(),
+                            overlay::dialog_submit_inputs(&spec, &inputs.borrow()),
                         )
                     });
                 }
@@ -6020,10 +6169,33 @@ impl Render for RootView {
         let tree = self.tree.clone();
         let error = self.error.clone();
 
+        let fallback_title_bar = self
+            .custom_title_bar
+            .as_ref()
+            .filter(|_| error.is_some() || tree.as_deref().and_then(direct_title_bar).is_none())
+            .map(|bar| {
+                div()
+                    .id("error-titlebar")
+                    .test_support()
+                    .flex_shrink_0()
+                    .child(
+                        apply_style(TitleBar::new(), bar, cx)
+                            .child(div().px_3().child(self.applied_title.clone())),
+                    )
+                    .into_any_element()
+            });
+
         let body = if let Some(error) = error {
             v_flex()
+                .p_4()
                 .gap_2()
-                .child(div().text_color(cx.theme().danger).child("Clojure error"))
+                .child(
+                    div()
+                        .id("clojure-error")
+                        .test_support()
+                        .text_color(cx.theme().danger)
+                        .child("Clojure error"),
+                )
                 .child(div().text_color(cx.theme().foreground).child(error))
                 .into_any_element()
         } else if let Some(tree) = tree.as_ref() {
@@ -6035,6 +6207,9 @@ impl Render for RootView {
                 .into_any_element()
         };
 
+        // Overlay builders cannot borrow RootView while it is rendering. Keep
+        // input entities and live callbacks ready before painting the layers.
+        self.sync_dialog_inputs(window, cx);
         let used = std::mem::take(&mut self.used_inputs);
         self.inputs.retain(|key, _| used.contains(key));
         // SliderState stores the last laid-out bar size. Dropping it on tab
@@ -6097,6 +6272,7 @@ impl Render for RootView {
             .relative()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
+            .children(fallback_title_bar)
             .child(v_flex().flex_1().min_h_0().child(body))
             .when(show_footer, |el| {
                 el.child(
@@ -7615,6 +7791,12 @@ fn quit_host(cx: &mut App) {
 
 const DEFAULT_WINDOW_SIZE: (f32, f32) = (580., 820.);
 
+fn direct_title_bar(tree: &Node) -> Option<&Node> {
+    (tree.kind == "window")
+        .then(|| tree.children.iter().find(|child| child.kind == "title-bar"))
+        .flatten()
+}
+
 fn requested_window_title(tree: Option<&Node>) -> &str {
     tree.and_then(|tree| tree.title.as_deref())
         .filter(|title| !title.is_empty())
@@ -7626,9 +7808,7 @@ fn initial_window_options(events: &[HostEvent], bounds: Bounds<Pixels>) -> gpui:
         HostEvent::Tree(tree, _, _) => Some(tree.as_ref()),
         _ => None,
     });
-    let title_bar = tree
-        .filter(|tree| tree.kind == "window")
-        .and_then(|tree| tree.children.iter().find(|child| child.kind == "title-bar"));
+    let title_bar = tree.and_then(direct_title_bar);
     let mut options = if title_bar.is_some() {
         TitleBar::window_options()
     } else {

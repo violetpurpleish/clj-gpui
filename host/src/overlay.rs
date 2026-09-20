@@ -10,8 +10,8 @@ use crate::mapping;
 use crate::protocol::{self, Cmd, Item, Node};
 use gpui::StatefulInteractiveElement;
 use gpui::{
-    App, Axis, Div, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
-    Window, div, px,
+    App, Axis, Div, Focusable, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString,
+    Styled, Window, div, px,
 };
 use gpui_component::{
     Colorize as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _, Size,
@@ -337,6 +337,12 @@ pub fn latest_dialog_spec(live: &RefCell<Vec<DialogSpec>>, key: &str) -> Option<
 /// the next action can use the replacement callback registry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QueuedAction {
+    DialogInput {
+        key: String,
+        event: DialogInputEvent,
+        value: String,
+        revision: u64,
+    },
     ButtonClick {
         key: String,
     },
@@ -388,6 +394,19 @@ pub enum QueuedAction {
 }
 
 pub type ActionEmitter = Rc<dyn Fn(QueuedAction, &mut App)>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DialogInputEvent {
+    Change,
+    Submit,
+    Blur,
+    Escape,
+}
+
+pub struct InputEcho {
+    pub key: String,
+    pub revision: u64,
+}
 
 /// Native Command value that left the queue in this callback batch.
 ///
@@ -447,6 +466,7 @@ pub struct OutboundCallbacks {
     pub calls: Vec<protocol::CallbackCall>,
     pub command_echo: Option<CommandEcho>,
     pub slider_echo: Option<SliderEcho>,
+    pub input_echo: Option<InputEcho>,
 }
 
 #[derive(Default)]
@@ -458,6 +478,20 @@ pub struct CallbackQueue {
 
 impl CallbackQueue {
     pub fn push(&mut self, action: QueuedAction) {
+        if let QueuedAction::DialogInput {
+            key,
+            event: DialogInputEvent::Change,
+            ..
+        } = &action
+            && let Some(QueuedAction::DialogInput {
+                key: pending_key,
+                event: DialogInputEvent::Change,
+                ..
+            }) = self.pending.back()
+            && pending_key == key
+        {
+            self.pending.pop_back();
+        }
         if let QueuedAction::SliderGesture {
             key,
             change,
@@ -515,6 +549,13 @@ impl CallbackQueue {
                     calls,
                     command_echo: CommandEcho::from_action(&action),
                     slider_echo: SliderEcho::from_action(&action),
+                    input_echo: match &action {
+                        QueuedAction::DialogInput { key, revision, .. } => Some(InputEcho {
+                            key: key.clone(),
+                            revision: *revision,
+                        }),
+                        _ => None,
+                    },
                 });
             }
         }
@@ -555,6 +596,33 @@ impl CallbackQueue {
 
 impl QueuedAction {
     fn resolve(&self, tree: &Node) -> Vec<protocol::CallbackCall> {
+        if let Self::DialogInput {
+            key, event, value, ..
+        } = self
+        {
+            for spec in collect_open_dialogs(tree) {
+                for (path, node) in
+                    dialog_inputs(&spec.node.children, &format!("{}/content", spec.key))
+                {
+                    if dialog_input_key(&spec.key, &node, &path) == *key {
+                        let callback = match event {
+                            DialogInputEvent::Change => node.on_change,
+                            DialogInputEvent::Submit => node.on_submit,
+                            DialogInputEvent::Blur => node.on_blur,
+                            DialogInputEvent::Escape => node.on_escape,
+                        };
+                        return callback
+                            .map(|id| match event {
+                                DialogInputEvent::Escape => protocol::CallbackCall::fire(id),
+                                _ => protocol::CallbackCall::with_value(id, json!(value)),
+                            })
+                            .into_iter()
+                            .collect();
+                    }
+                }
+            }
+            return Vec::new();
+        }
         if let Self::ScrollerLabelClick { key, label } = self {
             let mut callback = None;
             walk_nodes(tree, "root", &mut |node, path| {
@@ -578,6 +646,7 @@ impl QueuedAction {
                 .collect();
         }
         let key = match self {
+            Self::DialogInput { key, .. } => key,
             Self::ButtonClick { key }
             | Self::ScrollerLabelClick { key, .. }
             | Self::SliderGesture { key, .. }
@@ -593,6 +662,7 @@ impl QueuedAction {
         let mut found = None;
         walk_nodes(tree, "root", &mut |node, path| {
             let kind_matches = match self {
+                Self::DialogInput { .. } => false, // resolved in its dialog above
                 Self::ButtonClick { .. } => node.kind == "button",
                 Self::ScrollerLabelClick { .. } => false, // resolved in its scroller above
                 Self::SliderGesture { .. } => node.kind == "slider",
@@ -806,12 +876,59 @@ pub fn paint_static(
     path: &str,
     cx: Option<&App>,
 ) -> gpui::AnyElement {
+    paint_static_with_inputs(nodes, emit, path, cx, &HashMap::new())
+}
+
+pub(crate) type OverlayInputs = HashMap<String, gpui::Entity<InputState>>;
+
+pub(crate) fn dialog_submit_inputs(
+    spec: &DialogSpec,
+    inputs: &OverlayInputs,
+) -> Vec<gpui::Entity<InputState>> {
+    dialog_inputs(&spec.node.children, &format!("{}/content", spec.key))
+        .into_iter()
+        .filter(|(_, node)| node.on_submit.is_some())
+        .filter_map(|(path, _)| inputs.get(&path).cloned())
+        .collect()
+}
+
+/// Collect only controls the static overlay painter can mount. Keep their
+/// paint paths separate from retained identities, so a stable id survives a
+/// layout change without sharing state with another dialog or the main tree.
+pub(crate) fn dialog_inputs(nodes: &[Node], path: &str) -> Vec<(String, Node)> {
+    let mut inputs = Vec::new();
+    for (index, node) in nodes.iter().enumerate() {
+        let path = static_child_path(path, index);
+        match node.kind.as_str() {
+            "input" => inputs.push((path, node.clone())),
+            "hstack" | "vstack" => inputs.extend(dialog_inputs(&node.children, &path)),
+            _ => {}
+        }
+    }
+    inputs
+}
+
+pub(crate) fn dialog_input_key(scope: &str, node: &Node, path: &str) -> String {
+    let identity = node.id.as_deref().filter(|id| !id.is_empty());
+    match identity {
+        Some(id) => format!("dialog-input/{}:{scope}/id/{}:{id}", scope.len(), id.len()),
+        None => format!("dialog-input/{}:{scope}/path/{path}", scope.len()),
+    }
+}
+
+pub(crate) fn paint_static_with_inputs(
+    nodes: &[Node],
+    emit: ActionEmitter,
+    path: &str,
+    cx: Option<&App>,
+    inputs: &OverlayInputs,
+) -> gpui::AnyElement {
     v_flex()
         .gap(px(8.))
         .p(px(8.))
         .min_w(px(160.))
         .children(nodes.iter().enumerate().map(|(ix, node)| {
-            paint_static_node(node, &static_child_path(path, ix), emit.clone(), cx)
+            paint_static_node(node, &static_child_path(path, ix), emit.clone(), cx, inputs)
         }))
         .into_any_element()
 }
@@ -1471,8 +1588,17 @@ fn paint_static_node(
     path: &str,
     emit: ActionEmitter,
     cx: Option<&App>,
+    inputs: &OverlayInputs,
 ) -> gpui::AnyElement {
     match node.kind.as_str() {
+        "input" if inputs.contains_key(path) => mapping::apply_styled(
+            mapping::apply_input_chrome(
+                Input::new(&inputs[path]).id(SharedString::from(path.to_string())),
+                node,
+            ),
+            node,
+        )
+        .into_any_element(),
         "button" => {
             let mut button = Button::new(SharedString::from(path.to_string()));
             if let Some(label) = mapping::jump_button_visible_label(node) {
@@ -1488,18 +1614,36 @@ fn paint_static_node(
             }
             button.into_any_element()
         }
-        "hstack" => h_flex()
-            .gap(px(node.gap.unwrap_or(8.)))
-            .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_static_node(child, &static_child_path(path, child_ix), emit.clone(), cx)
-            }))
-            .into_any_element(),
-        "vstack" => v_flex()
-            .gap(px(node.gap.unwrap_or(8.)))
-            .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_static_node(child, &static_child_path(path, child_ix), emit.clone(), cx)
-            }))
-            .into_any_element(),
+        "hstack" => mapping::apply_styled(
+            h_flex().gap(px(node.gap.unwrap_or(8.))).children(
+                node.children.iter().enumerate().map(|(child_ix, child)| {
+                    paint_static_node(
+                        child,
+                        &static_child_path(path, child_ix),
+                        emit.clone(),
+                        cx,
+                        inputs,
+                    )
+                }),
+            ),
+            node,
+        )
+        .into_any_element(),
+        "vstack" => mapping::apply_styled(
+            v_flex().gap(px(node.gap.unwrap_or(8.))).children(
+                node.children.iter().enumerate().map(|(child_ix, child)| {
+                    paint_static_node(
+                        child,
+                        &static_child_path(path, child_ix),
+                        emit.clone(),
+                        cx,
+                        inputs,
+                    )
+                }),
+            ),
+            node,
+        )
+        .into_any_element(),
         "separator" => gpui_component::separator::Separator::horizontal().into_any_element(),
         "icon" => {
             let name = node.icon.as_deref().or(node.text.as_deref()).unwrap_or("");
@@ -1507,10 +1651,13 @@ fn paint_static_node(
                 .unwrap_or_else(|| Icon::new(IconName::Asterisk))
                 .into_any_element()
         }
-        _ => div()
-            .id(SharedString::from(path.to_string()))
-            .child(node.text.clone().unwrap_or_default())
-            .into_any_element(),
+        _ => mapping::apply_styled(
+            div()
+                .id(SharedString::from(path.to_string()))
+                .child(node.text.clone().unwrap_or_default()),
+            node,
+        )
+        .into_any_element(),
     }
 }
 
@@ -1678,11 +1825,23 @@ pub fn bind_dialog_callbacks(
     key: String,
     emit: ActionEmitter,
     close: Rc<RefCell<DialogClose>>,
+    submit_inputs: Vec<gpui::Entity<InputState>>,
 ) -> gpui_component::dialog::Dialog {
     dialog
         .on_ok({
             let close = close.clone();
-            move |_, _, _| close.borrow_mut().action(true)
+            move |event, window, cx| {
+                // Kit's dialog Confirm also sees Enter from a text field.
+                // Let that field's submit callback own validation/async close.
+                if event.is_keyboard()
+                    && submit_inputs
+                        .iter()
+                        .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
+                {
+                    return false;
+                }
+                close.borrow_mut().action(true)
+            }
         })
         .on_cancel({
             let close = close.clone();
@@ -1699,6 +1858,7 @@ pub fn bind_alert_dialog_callbacks(
     alert: AlertDialog,
     key: String,
     emit: ActionEmitter,
+    submit_inputs: Vec<gpui::Entity<InputState>>,
 ) -> AlertDialog {
     // AlertDialog keeps action callbacks on its own button props but keeps
     // `on_close` on the embedded Dialog. `build_surface` replaces the latter
@@ -1708,7 +1868,14 @@ pub fn bind_alert_dialog_callbacks(
     let cancel_key = key.clone();
     let cancel_emit = emit.clone();
     alert
-        .on_ok(move |_, _, cx| {
+        .on_ok(move |event, window, cx| {
+            if event.is_keyboard()
+                && submit_inputs
+                    .iter()
+                    .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
+            {
+                return false;
+            }
             emit(
                 QueuedAction::DialogClose {
                     key: key.clone(),

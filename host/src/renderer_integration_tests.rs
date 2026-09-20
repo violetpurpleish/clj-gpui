@@ -226,6 +226,69 @@ fn episode_list_tree(count: usize, generation: &str, query: &str) -> Node {
 }
 
 #[gpui_kit::test]
+async fn custom_titlebar_keeps_host_and_render_errors_below_window_controls(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(640.), px(420.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let normal: Node = serde_json::from_value(json!({
+        "type": "window", "chrome": "app", "children": [
+            {"type": "title-bar", "height": 56, "traffic-light-position": [10, 19]},
+            {"type": "button", "id": "content", "text": "Content"}
+        ]
+    }))
+    .unwrap();
+    event_tx
+        .send(HostEvent::tree(normal.clone(), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    event_tx
+        .send(HostEvent::Error("A callback failed".into()))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    cx.update_window(handle.into(), |_, window, _| {
+        assert_eq!(window.find("error-titlebar").bounds().size.height, px(56.));
+        assert!(window.find("clojure-error").bounds().origin.y >= px(56.));
+    })
+    .unwrap();
+
+    // Clojure's render exception fallback is a plain vstack, not HostEvent::Error.
+    let error: Node = serde_json::from_value(json!({
+        "type": "vstack", "padding": 12, "children": [
+            {"type": "button", "id": "render-error", "text": "Clojure error"}
+        ]
+    }))
+    .unwrap();
+    event_tx
+        .send(HostEvent::tree(error, None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    cx.update_window(handle.into(), |_, window, _| {
+        assert_eq!(window.find("error-titlebar").bounds().size.height, px(56.));
+        assert!(window.find("render-error").bounds().origin.y >= px(56.));
+    })
+    .unwrap();
+    event_tx
+        .send(HostEvent::tree(normal, None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    cx.update_window(handle.into(), |_, window, _| {
+        assert_eq!(window.find("content").bounds().origin.y, px(56.));
+        assert!(window.try_find("clojure-error").is_none());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 async fn episode_scroller_virtualizes_rich_controls_and_retains_search(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
@@ -1805,6 +1868,164 @@ fn dialog_tree(open: bool, generation: &str) -> Node {
         ]
     }))
     .unwrap()
+}
+
+fn input_dialog_tree(kind: &str, open: bool, generation: &str, value: &str, focus: bool) -> Node {
+    serde_json::from_value(json!({
+        "type": "window", "chrome": "app", "children": [
+            {"type": "input", "id": "url", "text": "outside"},
+            {"type": kind, "id": "add", "open": open, "title": "Add podcast",
+             "on-close": format!("close-{generation}"), "children": [
+                {"type": "vstack", "children": [
+                    {"type": "input", "id": "url", "text": value, "focus": focus,
+                     "placeholder": "Podcast URL", "accessibility-label": "Podcast URL",
+                     "on-change": format!("change-{generation}"),
+                     "on-submit": format!("submit-{generation}"),
+                     "on-blur": format!("blur-{generation}")}
+                ]}
+             ]}
+        ]
+    }))
+    .unwrap()
+}
+
+#[gpui_kit::test]
+async fn production_dialog_inputs_edit_submit_refresh_and_restore_focus(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    for kind in ["dialog", "alert-dialog"] {
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let (event_tx, event_rx) = async_channel::unbounded();
+        let handle = cx.open_window(size(px(640.), px(420.)), |window, cx| {
+            let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+            Root::new(view, window, cx)
+        });
+        let path = "add/content/0/0";
+        let key = "dialog-input/3:add/id/3:url";
+        event_tx
+            .send(HostEvent::tree(
+                input_dialog_tree(kind, false, "1", "", true),
+                None,
+                vec![],
+            ))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        let view = production_view(handle, cx);
+        assert!(
+            view.read_with(cx, |view, _| view.test_input_state_id(key))
+                .is_none()
+        );
+        cx.update_window(handle.into(), |_, window, cx| window.click("url", cx))
+            .unwrap();
+
+        event_tx
+            .send(HostEvent::tree(
+                input_dialog_tree(kind, true, "1", "", true),
+                None,
+                vec![],
+            ))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        let original = view
+            .read_with(cx, |view, _| view.test_input_state_id(key))
+            .unwrap();
+        assert_ne!(
+            Some(original),
+            view.read_with(cx, |view, _| view.test_input_state_id("url"))
+        );
+        drain(&cmd_rx);
+        cx.update_window(handle.into(), |_, window, cx| {
+            assert_eq!(window.find(path).focused(), Some(true));
+            window.input("https://example.com/feed", cx);
+            assert_eq!(window.find(path).value(), Some("https://example.com/feed"));
+            assert_eq!(window.find("url").value(), Some("outside"));
+        })
+        .unwrap();
+        paint_root(handle, cx);
+        let changed = drain(&cmd_rx);
+        assert!(
+            callback_pairs(&changed)
+                .contains(&("change-1".into(), Some(json!("https://example.com/feed"))))
+        );
+
+        // Enter arrives while on-change is replacing Clojure's registry.
+        // It must wait and resolve the new submit callback from the response.
+        cx.update_window(handle.into(), |_, window, cx| window.press("enter", cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert!(callback_pairs(&drain(&cmd_rx)).is_empty());
+
+        event_tx
+            .send(HostEvent::tree(
+                input_dialog_tree(kind, true, "2", "https://example.com/feed", false),
+                callback_sequence(&changed),
+                vec![],
+            ))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        assert_eq!(
+            Some(original),
+            view.read_with(cx, |view, _| view.test_input_state_id(key))
+        );
+        let submitted = drain(&cmd_rx);
+        assert!(
+            callback_pairs(&submitted)
+                .contains(&("submit-2".into(), Some(json!("https://example.com/feed")))),
+            "kind={kind}, changed={:?}, submitted={:?}",
+            callback_pairs(&changed),
+            callback_pairs(&submitted)
+        );
+        // App-driven close after successful submission restores the original
+        // input and prunes the dialog slot, even with the same user-facing id.
+        event_tx
+            .send(HostEvent::tree(
+                input_dialog_tree(kind, false, "3", "", false),
+                callback_sequence(&submitted),
+                vec![],
+            ))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        assert!(
+            view.read_with(cx, |view, _| view.test_input_state_id(key))
+                .is_none()
+        );
+        cx.update_window(handle.into(), |_, window, _| {
+            assert_eq!(window.find("url").focused(), Some(true));
+            assert!(window.try_find(path).is_none());
+        })
+        .unwrap();
+
+        event_tx
+            .send(HostEvent::tree(
+                input_dialog_tree(kind, true, "4", "", true),
+                None,
+                vec![],
+            ))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        assert_ne!(
+            Some(original),
+            view.read_with(cx, |view, _| view.test_input_state_id(key))
+        );
+        drain(&cmd_rx);
+        cx.update_window(handle.into(), |_, window, cx| {
+            assert_eq!(window.find(path).value(), Some(""));
+            window.press("escape", cx);
+        })
+        .unwrap();
+        settle_root(handle, cx);
+        let closed = drain(&cmd_rx);
+        assert!(callback_pairs(&closed).contains(&("close-4".into(), None)));
+        cx.update_window(handle.into(), |_, window, _| {
+            assert_eq!(window.find("url").focused(), Some(true));
+            assert!(window.try_find(path).is_none());
+        })
+        .unwrap();
+    }
 }
 
 #[gpui_kit::test]
