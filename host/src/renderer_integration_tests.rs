@@ -104,6 +104,101 @@ fn paint_root(handle: WindowHandle<Root>, cx: &mut TestAppContext) {
     }
 }
 
+#[gpui_kit::test]
+async fn title_bar_renders_styled_children_and_keeps_title_updates(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        syntax::init(cx);
+    });
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(640.), px(360.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let mut tree: Node = serde_json::from_value(json!({
+        "type": "window", "title": "Toolbar", "chrome": "app",
+        "children": [
+            {"type": "title-bar", "height": 56, "bg": "#112233", "children": [
+                {"type": "hstack", "flex": 1, "justify": "between", "children": [
+                    {"type": "label", "text": "App"},
+                    {"type": "button", "id": "refresh", "text": "Refresh", "on-click": "refresh-old"}
+                ]}
+            ]},
+            {"type": "button", "id": "content", "text": "Content"}
+        ]
+    })).unwrap();
+    event_tx
+        .send(HostEvent::tree(tree.clone(), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    // Read the headless platform's recorded set_window_title call, rather than
+    // Window::window_title (a macOS-only getter with an empty test default).
+    assert_eq!(
+        VisualTestContext::from_window(handle.into(), cx)
+            .window_title()
+            .as_deref(),
+        Some("Toolbar")
+    );
+    drain(&cmd_rx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        let button = window.find("refresh").bounds();
+        let content = window.find("content").bounds();
+        assert!(button.origin.y >= px(0.));
+        assert!(button.bottom() <= px(56.));
+        assert_eq!(content.origin.y, px(56.));
+        window.click("refresh", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let commands = drain(&cmd_rx);
+    let callback_seq = callback_sequence(&commands);
+    assert_eq!(
+        callback_pairs(&commands),
+        vec![("refresh-old".into(), None)]
+    );
+
+    tree.title = Some("Updated toolbar".into());
+    tree.children[0].children[0].children[1].on_click = Some("refresh-new".into());
+    event_tx
+        .send(HostEvent::tree(tree.clone(), callback_seq, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        VisualTestContext::from_window(handle.into(), cx)
+            .window_title()
+            .as_deref(),
+        Some("Updated toolbar")
+    );
+    drain(&cmd_rx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.click("refresh", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let commands = drain(&cmd_rx);
+    let callback_seq = callback_sequence(&commands);
+    assert_eq!(
+        callback_pairs(&commands),
+        vec![("refresh-new".into(), None)]
+    );
+
+    tree.title = None;
+    event_tx
+        .send(HostEvent::tree(tree, callback_seq, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        VisualTestContext::from_window(handle.into(), cx)
+            .window_title()
+            .as_deref(),
+        Some("clj-gpui")
+    );
+}
+
 fn episode_list_tree(count: usize, generation: &str, query: &str) -> Node {
     let mut rows = vec![json!({"type": "vstack", "id": "controls", "padding": 16,
         "children": [{"type": "input", "id": "episode-search", "text": query,

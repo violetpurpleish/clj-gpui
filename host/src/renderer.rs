@@ -15,7 +15,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, FocusableExt as _, Icon, IconName, IndexPath, Root,
-    Sizable as _, WindowExt as _,
+    Sizable as _, TitleBar, WindowExt as _,
     accordion::Accordion,
     alert::Alert,
     badge::Badge,
@@ -932,11 +932,7 @@ impl RootView {
                 return;
             };
             (
-                tree.title
-                    .as_deref()
-                    .filter(|title| !title.is_empty())
-                    .unwrap_or("clj-gpui")
-                    .to_string(),
+                requested_window_title(Some(tree)).to_string(),
                 tree.window_width.or(tree.width),
                 tree.window_height.or(tree.height),
             )
@@ -1711,6 +1707,13 @@ impl RootView {
                 )
                 .children(self.render_children(node, path, window, cx))
                 .into_any_element()
+            }
+            "title-bar" => {
+                let mut bar = apply_style(TitleBar::new(), node, cx);
+                for child in self.render_children(node, path, window, cx) {
+                    bar = bar.child(child);
+                }
+                bar.into_any_element()
             }
             "label" => {
                 let painted = apply_style(mapping::kit_label(node), node, cx);
@@ -7612,6 +7615,38 @@ fn quit_host(cx: &mut App) {
 
 const DEFAULT_WINDOW_SIZE: (f32, f32) = (580., 820.);
 
+fn requested_window_title(tree: Option<&Node>) -> &str {
+    tree.and_then(|tree| tree.title.as_deref())
+        .filter(|title| !title.is_empty())
+        .unwrap_or("clj-gpui")
+}
+
+fn initial_window_options(events: &[HostEvent], bounds: Bounds<Pixels>) -> gpui::WindowOptions {
+    let tree = events.iter().find_map(|event| match event {
+        HostEvent::Tree(tree, _, _) => Some(tree.as_ref()),
+        _ => None,
+    });
+    let title_bar = tree
+        .filter(|tree| tree.kind == "window")
+        .and_then(|tree| tree.children.iter().find(|child| child.kind == "title-bar"));
+    let mut options = if title_bar.is_some() {
+        TitleBar::window_options()
+    } else {
+        gpui::WindowOptions {
+            titlebar: Some(gpui::TitlebarOptions::default()),
+            ..Default::default()
+        }
+    };
+    options.window_bounds = Some(gpui::WindowBounds::Windowed(bounds));
+    if let Some(titlebar) = options.titlebar.as_mut() {
+        titlebar.title = Some(requested_window_title(tree).to_string().into());
+        if let Some([x, y]) = title_bar.and_then(|bar| bar.traffic_light_position) {
+            titlebar.traffic_light_position = Some(gpui::point(px(x), px(y)));
+        }
+    }
+    options
+}
+
 fn requested_window_size(tree: &Node) -> Option<(f32, f32)> {
     Some((
         tree.window_width.or(tree.width)?,
@@ -7651,8 +7686,6 @@ pub fn open_window(
     event_rx: async_channel::Receiver<HostEvent>,
     cx: &mut App,
 ) {
-    use gpui::{Bounds, TitlebarOptions, WindowBounds, WindowOptions, size};
-
     // GPUI's macOS default is to keep the NSApplication running after the
     // last window closes. The close-button path also goes through an
     // async try_borrow_mut; if App is already borrowed, on_window_closed
@@ -7664,19 +7697,13 @@ pub fn open_window(
     .detach();
 
     // Fetch the first tree before creating the native window so its requested
-    // size is centered directly. Resizing a centered fallback window later
+    // size is centered directly and a direct TitleBar can select Kit's native
+    // window options. Resizing a centered fallback window later
     // preserves its old origin and makes wider apps extend off the right edge.
     let (initial_events, (width, height)) = initial_window_events(&cmd_tx, &event_rx);
     let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
     cx.open_window(
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(TitlebarOptions {
-                title: Some("clj-gpui".into()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
+        initial_window_options(&initial_events, bounds),
         |window, cx| {
             let view = cx.new(|cx| {
                 RootView::new_with_initial_events(
@@ -7708,9 +7735,120 @@ pub fn open_window(
 
 #[cfg(test)]
 mod window_startup_tests {
-    use super::{DEFAULT_WINDOW_SIZE, initial_window_events, requested_window_size};
+    use super::{
+        DEFAULT_WINDOW_SIZE, initial_window_events, initial_window_options, requested_window_size,
+    };
     use crate::protocol::{Cmd, HostEvent, Node};
+    use gpui_kit::component::TitleBar;
+    use gpui_kit::{Bounds, WindowBounds, point, px, size};
+    use serde_json::json;
     use std::sync::mpsc;
+
+    fn bounds() -> Bounds<gpui_kit::Pixels> {
+        Bounds::new(point(px(200.), px(100.)), size(px(1000.), px(700.)))
+    }
+
+    #[test]
+    fn direct_title_bar_uses_kit_defaults_and_preserves_title_and_bounds() {
+        // Chrome only controls the host HUD, not the native titlebar choice.
+        for chrome in ["app", "dev"] {
+            let tree = serde_json::from_value(json!({
+                "type": "window", "title": "cljpod", "chrome": chrome,
+                "children": [{"type": "title-bar"}, {"type": "label", "text": "Content"}]
+            }))
+            .unwrap();
+            let options = initial_window_options(&[HostEvent::tree(tree, None, vec![])], bounds());
+            let kit = TitleBar::window_options();
+            assert_eq!(
+                options.window_bounds,
+                Some(WindowBounds::Windowed(bounds()))
+            );
+            assert_eq!(options.app_owns_titlebar_drag, kit.app_owns_titlebar_drag);
+            let titlebar = options.titlebar.unwrap();
+            let kit_titlebar = kit.titlebar.unwrap();
+            assert_eq!(titlebar.title.as_deref(), Some("cljpod"));
+            assert_eq!(
+                titlebar.appears_transparent,
+                kit_titlebar.appears_transparent
+            );
+            assert_eq!(
+                titlebar.traffic_light_position,
+                kit_titlebar.traffic_light_position
+            );
+        }
+    }
+
+    #[test]
+    fn traffic_light_override_only_changes_requested_kit_field() {
+        let tree = serde_json::from_value(json!({
+            "type": "window", "title": "Tall toolbar",
+            "children": [{"type": "title-bar", "traffic-light-position": [10, 19]}]
+        }))
+        .unwrap();
+        let options = initial_window_options(&[HostEvent::tree(tree, None, vec![])], bounds());
+        let kit = TitleBar::window_options();
+        assert_eq!(options.app_owns_titlebar_drag, kit.app_owns_titlebar_drag);
+        let titlebar = options.titlebar.unwrap();
+        assert_eq!(titlebar.title.as_deref(), Some("Tall toolbar"));
+        assert_eq!(
+            titlebar.appears_transparent,
+            kit.titlebar.unwrap().appears_transparent
+        );
+        assert_eq!(
+            titlebar.traffic_light_position,
+            Some(point(px(10.), px(19.)))
+        );
+    }
+
+    #[test]
+    fn windows_without_direct_title_bar_keep_native_defaults() {
+        for value in [
+            json!({"type": "window", "chrome": "app", "children": []}),
+            json!({"type": "window", "children": [{"type": "vstack", "children": [{"type": "title-bar", "traffic-light-position": [10, 19]}]}]}),
+            json!({"type": "vstack", "children": [{"type": "title-bar"}]}),
+        ] {
+            let mut tree: Node = serde_json::from_value(value).unwrap();
+            tree.title = Some("Native title".into());
+            let options = initial_window_options(&[HostEvent::tree(tree, None, vec![])], bounds());
+            assert!(!options.app_owns_titlebar_drag);
+            assert_eq!(
+                options.window_bounds,
+                Some(WindowBounds::Windowed(bounds()))
+            );
+            let titlebar = options.titlebar.unwrap();
+            assert!(!titlebar.appears_transparent);
+            assert_eq!(titlebar.traffic_light_position, None);
+            assert_eq!(titlebar.title.as_deref(), Some("Native title"));
+        }
+    }
+
+    #[test]
+    fn missing_or_empty_title_and_initial_error_keep_default_title() {
+        let error = vec![HostEvent::Error("initial render failed".into())];
+        for events in [
+            vec![],
+            error,
+            vec![HostEvent::tree(
+                serde_json::from_value(json!({
+                    "type": "window", "title": "", "children": [{"type": "title-bar"}]
+                }))
+                .unwrap(),
+                None,
+                vec![],
+            )],
+            vec![HostEvent::tree(
+                serde_json::from_value(json!({
+                    "type": "window", "children": [{"type": "title-bar"}]
+                }))
+                .unwrap(),
+                None,
+                vec![],
+            )],
+        ] {
+            let options = initial_window_options(&events, bounds());
+            assert_eq!(options.titlebar.unwrap().title.as_deref(), Some("clj-gpui"));
+        }
+    }
 
     #[test]
     fn requested_size_prefers_native_window_dimensions() {

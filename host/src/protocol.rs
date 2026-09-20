@@ -1054,6 +1054,10 @@ pub struct Node {
     pub window_width: Option<f32>,
     #[serde(default, rename = "window-height")]
     pub window_height: Option<f32>,
+    /// TitleBar: optional macOS traffic-light position, read at window creation.
+    /// Omitted leaves GPUI Kit's default unchanged.
+    #[serde(default, rename = "traffic-light-position")]
+    pub traffic_light_position: Option<[f32; 2]>,
     /// Text input: request keyboard focus when true.
     #[serde(default)]
     pub focus: bool,
@@ -1977,6 +1981,36 @@ impl HostEvent {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn decodes_title_bar_with_optional_traffic_light_position() {
+        let bar: Node = serde_json::from_value(json!({
+            "type": "title-bar",
+            "height": 56,
+            "traffic-light-position": [10, 19.5],
+            "children": [{"type": "label", "text": "App"}]
+        }))
+        .unwrap();
+        assert_eq!(bar.kind, "title-bar");
+        assert_eq!(bar.height, Some(56.));
+        assert_eq!(bar.traffic_light_position, Some([10., 19.5]));
+        assert_eq!(bar.children[0].text.as_deref(), Some("App"));
+        for value in [
+            json!({"type": "title-bar"}),
+            json!({"type": "title-bar", "traffic-light-position": null}),
+        ] {
+            let bar: Node = serde_json::from_value(value).unwrap();
+            assert_eq!(bar.traffic_light_position, None);
+        }
+        for position in [json!([10]), json!([10, 19, 30]), json!(["10", 19])] {
+            assert!(
+                serde_json::from_value::<Node>(json!({
+                    "type": "title-bar", "traffic-light-position": position
+                }))
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn decodes_v3_button_node() {

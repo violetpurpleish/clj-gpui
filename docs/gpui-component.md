@@ -107,7 +107,7 @@ Coverage-table **status** is not Kit public-API parity by itself:
 | `highlighter::*` | — | ❌ | E | Tree-sitter internals for the editor |
 | `form::{v,h}_form` / `field` | — | ❌ | E | Layout sugar; `vstack` is enough |
 | `collapsible::Collapsible` | — | ❌ | E | Trait, not a widget |
-| `TitleBar` | `ui/window` | ❌ | D | Window chrome is already Clojure-owned |
+| `TitleBar` | `ui/title-bar` | ✅ | B | Ordinary children and Styled refinements; a direct child of the initial root window selects Kit `TitleBar::window_options()`. Optional macOS traffic-light position override. |
 | `WindowBorder` | — | ❌ | D | Linux decoration helper |
 | `Inspector` | — | ❌ | D | Debug-only |
 | `gpui-fps` | `:chrome :dev` | ✅ | D | Overlay HUD on the relative root; hidden when `:chrome :app` |

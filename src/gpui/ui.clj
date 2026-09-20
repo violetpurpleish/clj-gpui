@@ -703,6 +703,8 @@
   `:width` / `:height` are the native window size in pixels
   (`:window-width` / `:window-height` are accepted as aliases).
   Those size keys are not layout: children fill the window.
+  A direct `title-bar` child in the initial tree opts into GPUI Kit's
+  custom native titlebar. `:chrome` only controls the development HUD.
 
   `:theme` may live here (default for the window and the footer) or on
   any nested node, so different parts of the app can use different themes.
@@ -730,6 +732,27 @@
       (some? chrome) (assoc :chrome chrome)
       (some? width) (assoc :window-width width)
       (some? height) (assoc :window-height height))))
+
+(defn title-bar
+  "GPUI Kit TitleBar with ordinary children and an optional style map.
+
+  Place this directly inside `ui/window` in the initial tree to use Kit's
+  unified titlebar, native window controls, dragging, and double-click
+  behavior. Ordinary layout/style keys refine Kit's own styling.
+  Kit reserves space for macOS traffic lights by default; overriding
+  `:padding` also overrides that space.
+
+  Optional `:traffic-light-position [x y]` sets the macOS traffic-light
+  position in pixels. Omission keeps Kit's default. Native titlebar
+  selection and this position are chosen at startup; restart to change them.
+  The window's `:title` remains the native title and may change live.
+
+  (ui/title-bar (ui/label \"My app\"))
+  (ui/title-bar {:height 56 :traffic-light-position [10 19]}
+    (ui/label \"My app\"))"
+  [& args]
+  (let [[style children] (split-style-children args)]
+    (assoc style :type :title-bar :children (flatten-children children))))
 
 (defn vstack
   "Vertical stack. An optional leading map is treated as layout/style.

@@ -202,7 +202,7 @@ for constructor shorthand details.
 
 | Field | Type | Used by |
 |---|---|---|
-| `type` | string | all (`window`, `label`, `button`, `vstack`, `hstack`, `spacer`, `checkbox`, `scroll`, `input`, `textarea`, `switch`, `toggle`, `toggle-group`, `radio-group`, `slider`, `progress`, `progress-circle`, `separator`, `spinner`, `tag`, `alert`, `skeleton`, `shimmer`, `kbd`, `link`, `group-box`, `badge`, `tabs`, `select`, `combobox`, `icon`, `clipboard`, `breadcrumb`, `avatar`, `avatar-group`, `accordion`, `description-list`, `dialog`, `alert-dialog`, `popover`, `hover-card`, `dropdown-menu`, `dropdown-button`, `context-menu`, `native-menu`, `command`, `status-bar`, `list`, `data-table`, `table`, `table-header`, `table-body`, `table-footer`, `table-row`, `table-head`, `table-cell`, `table-caption`, `tree`, `sheet`, `notification`, `number-input`, `otp-input`, `color-picker`, `date-picker`, `editor`, `virtual-list`, `chart`, `markdown`, `html`, `sidebar`, `settings`, `dock`, `resizable`, `rating`, `stepper`, `pagination`, `message`, `message-group`, `message-avatar`, `message-header`, `message-content`, `message-footer`, `bubble`, `bubble-content`, `bubble-group`, `bubble-reactions`, `attachment`, `attachment-media`, `attachment-media-overlay`, `attachment-content`, `attachment-title`, `attachment-description`, `attachment-actions`, `attachment-group`, `marker`, `marker-icon`, `marker-content`, `message-scroller`, `nav-stack`, `nav-page`) |
+| `type` | string | all (`window`, `title-bar`, `label`, `button`, `vstack`, `hstack`, `spacer`, `checkbox`, `scroll`, `input`, `textarea`, `switch`, `toggle`, `toggle-group`, `radio-group`, `slider`, `progress`, `progress-circle`, `separator`, `spinner`, `tag`, `alert`, `skeleton`, `shimmer`, `kbd`, `link`, `group-box`, `badge`, `tabs`, `select`, `combobox`, `icon`, `clipboard`, `breadcrumb`, `avatar`, `avatar-group`, `accordion`, `description-list`, `dialog`, `alert-dialog`, `popover`, `hover-card`, `dropdown-menu`, `dropdown-button`, `context-menu`, `native-menu`, `command`, `status-bar`, `list`, `data-table`, `table`, `table-header`, `table-body`, `table-footer`, `table-row`, `table-head`, `table-cell`, `table-caption`, `tree`, `sheet`, `notification`, `number-input`, `otp-input`, `color-picker`, `date-picker`, `editor`, `virtual-list`, `chart`, `markdown`, `html`, `sidebar`, `settings`, `dock`, `resizable`, `rating`, `stepper`, `pagination`, `message`, `message-group`, `message-avatar`, `message-header`, `message-content`, `message-footer`, `bubble`, `bubble-content`, `bubble-group`, `bubble-reactions`, `attachment`, `attachment-media`, `attachment-media-overlay`, `attachment-content`, `attachment-title`, `attachment-description`, `attachment-actions`, `attachment-group`, `marker`, `marker-icon`, `marker-content`, `message-scroller`, `nav-stack`, `nav-page`) |
 | `id` | string | optional stable identity, especially `input`, `textarea`, `slider`, `select`, `combobox`, `list`, `data-table`, `tree`, `dialog`, `alert-dialog`, `sheet`, `notification`, `editor`, `rating`, `stepper`, `pagination`, `progress-circle`, `shimmer`, `hover-card`, `message-scroller`, `nav-stack`, `nav-page`, `native-menu`, `command`, `attachment`, `attachment-group`, `marker`, and each `message` row inside a scroller |
 | `text` | string | `label`, `button`, `checkbox`, `input`, `textarea`, `switch`, `toggle`, `separator`, `tag`, `alert`, `kbd`, `link`, `clipboard`, `avatar`, `editor`, `markdown`, `html`, `number-input`, `table-head` / `table-cell` / `table-caption` (when they have no children), `bubble` / `marker` / `attachment-title` / `attachment-description` / `marker-content` (string form) |
 | `placeholder` | string | `input`, `textarea`, `select`, `combobox`, `date-picker`, `number-input`, `command` |
@@ -429,6 +429,7 @@ for constructor shorthand details.
 | `theme` | string | any node: `system` (default), `light`, `dark`, a shipped GPUI Kit palette such as `Tokyo Night` (kebab `tokyo-night` is the same), a custom ThemeSet family name, or a variant name. Nested nodes scope that subtree |
 | `chrome` | string | `window` (or any root): `dev` (default, nREPL footer + `gpui-fps` HUD) or `app` (no host chrome) |
 | `window-width`, `window-height` | number | `window` (or any root): native window size in pixels |
+| `traffic-light-position` | `[number, number]` | `title-bar`: optional macOS traffic-light position in pixels; read at startup, omitted/null keeps Kit default |
 
 Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-release` / `:on-submit` / `:on-double-click` / `:on-blur` / `:on-escape` / `:on-close` / `:on-copied` / `:on-ok` / `:on-cancel` / `:on-confirm` / `:on-select` / `:on-open-change` / `:on-forward-change` / `:on-query` / `:on-export` / `:on-sort` / `:on-load-more` with ids such as `"cb-2"`. Nested `:items` / `:options` / `:links` / `:series` / `:content` / `:trigger` / `:footer` / `:left` / `:right` are walked too. The registry is rebuilt on every export. `nav-stack` `:item` is a static recipe map (or `"slide"`), not a callback: phase and progress are per-frame and are applied by the host. A Clojure `:item` function is dropped as JSON `false` so it still suppresses `transition-style` rather than resurrecting `slide`.
 
@@ -479,3 +480,17 @@ Window chrome is Clojure-owned on a `window` node (the host still reads these ke
 * `:window-width` / `:window-height` resize the window when those values change in the tree. On `ui/window`, Clojure maps `:width` / `:height` to these keys so they are not layout. If the root is not a `window`, root `:width` / `:height` are still used when the `window-*` keys are omitted.
 
 The size is applied when the tree’s requested size changes, not on every user drag.
+
+`title-bar` is an additive v11 node backed by GPUI Kit `TitleBar`, with ordinary
+`children` and the usual layout/style fields. If the initial root `window` has a
+direct `title-bar` child, startup uses `TitleBar::window_options()` and preserves
+the requested window bounds and native `title`. Windows without that direct child
+keep the existing native titlebar options; `chrome` only controls the host HUD.
+
+Optional `traffic-light-position: [x, y]` on that child decodes as two numbers in
+pixels and overrides only Kit's `TitlebarOptions.traffic_light_position` (macOS).
+Omitted or null keeps Kit's default. If multiple direct title bars are supplied,
+the first selects the options; applications should use one. Titlebar selection
+and traffic-light position are startup options, while the root `title` continues
+to update through `window.set_window_title`. No protocol version bump is needed:
+existing trees and fields are unchanged.

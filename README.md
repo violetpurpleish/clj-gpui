@@ -51,6 +51,9 @@ cd examples/widgets && clj -M:dev
 # Classic TodoMVC (light card, Enter to add)
 cd examples/todomvc && clj -M:dev
 
+# Unified custom toolbar with native window controls
+cd examples/title-bar && clj -M:dev
+
 # Custom ThemeSet defined in Clojure (Catppuccin Violet)
 cd examples/themes/catppuccin-violet && clj -M:dev
 ```
@@ -441,6 +444,22 @@ Kit 0.6 renamed a few widgets. clj-gpui uses those names (no 0.5.1 aliases): `ui
 GPUI Kit 0.6 coverage (what is wrapped, deferred, or intentionally not exposed) lives in [docs/gpui-component.md](docs/gpui-component.md).
 
 Return `ui/window` from `app`. `:title`, `:chrome`, and `:width` / `:height` only make sense there. `:chrome :dev` (default) shows the nREPL footer and the `gpui-fps` HUD; `:chrome :app` hides host chrome.
+
+Use `ui/title-bar` as a **direct child** of `ui/window` to give GPUI Kit ownership of the custom titlebar. On macOS, the native traffic lights sit inside the unified toolbar. Kit supplies the platform window controls, dragging, double-click behavior, and default styling:
+
+```clojure
+(ui/window {:title "cljpod" :width 1000 :height 700 :chrome :app}
+  (ui/title-bar
+    (ui/hstack {:flex 1 :justify :between}
+      (ui/label "cljpod")
+      (ui/button "Refresh" refresh!)))
+  (ui/vstack {:flex 1 :padding 16}
+    (ui/label "Application content")))
+```
+
+The optional leading style map accepts the usual layout and visual properties. For a taller toolbar, use `(ui/title-bar {:height 56 :traffic-light-position [10 19]} ...)`. The position is a macOS `[x y]` pixel override; omitting it keeps Kit's default. Kit reserves space for the traffic lights; put padding on the toolbar's children if you want to keep that default left inset.
+
+The initial tree selects the native titlebar and traffic-light position, so restart the app after adding/removing the direct title bar or changing the position. `:title` still sets native window metadata and updates live; visible title text is an ordinary child label. Windows without a direct `ui/title-bar` keep their existing native titlebar, independently of `:chrome`. See the runnable [title-bar example](examples/title-bar/src/title_bar/app.clj).
 
 Native platform actions (folder picker, reveal in Finder / the file manager) live in `[gpui.platform :as platform]`:
 

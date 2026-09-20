@@ -51,6 +51,41 @@
 (deftest window-title
   (is (= "clj-gpui" ui/window-title)))
 
+(deftest title-bar-children-and-style
+  (is (= {:type :title-bar :children []} (ui/title-bar)))
+  (is (= [(ui/label "App") (ui/label "One") (ui/label "Two")]
+         (:children (ui/title-bar (ui/label "App") nil false
+                                  ["One" [(ui/label "Two")]]))))
+  (let [bar (ui/title-bar {:height 56 :gap 8 :bg "#112233"
+                           :traffic-light-position [10 19]}
+                          (ui/hstack {:justify :between} (ui/label "App")))]
+    (is (= :title-bar (:type bar)))
+    (is (= 56 (:height bar)))
+    (is (= 8 (:gap bar)))
+    (is (= "#112233" (:bg bar)))
+    (is (= [10 19] (:traffic-light-position bar)))
+    (is (= :hstack (get-in bar [:children 0 :type])))))
+
+(deftest title-bar-exports-in-window-with-callbacks
+  (runtime/reset-callbacks!)
+  (let [clicked (atom false)
+        exported (runtime/export-tree
+                  (ui/window {:title "Toolbar" :chrome :app :width 1000 :height 700}
+                             (ui/title-bar {:height 56 :traffic-light-position [10 19]}
+                                           (ui/button "Refresh" #(reset! clicked true)))
+                             (ui/label "Content")))
+        bar (get-in exported [:children 0])]
+    (is (= "Toolbar" (:title exported)))
+    (is (= 1000 (:window-width exported)))
+    (is (= 700 (:window-height exported)))
+    (is (= "title-bar" (:type bar)))
+    (is (= 56 (:height bar)))
+    (is (= [10 19] (:traffic-light-position bar)))
+    (runtime/invoke-callback! (get-in bar [:children 0 :on-click]))
+    (is (true? @clicked)))
+  (is (not (contains? (runtime/export-tree (ui/title-bar "App"))
+                      :traffic-light-position))))
+
 (deftest named-themes-match-vendored-json
   (let [dir (io/file "host/themes")
         from-json (->> (or (.listFiles dir) (into-array java.io.File []))
