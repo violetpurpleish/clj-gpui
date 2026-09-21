@@ -346,10 +346,10 @@ pub enum QueuedAction {
     ButtonClick {
         key: String,
     },
-    /// A named label inside one scroller; never reuse an ID from another episode.
-    ScrollerLabelClick {
+    /// A named clickable node inside one scroller; never reuse another scroller's ID.
+    ScrollerNodeClick {
         key: String,
-        label: String,
+        node_id: String,
     },
     SliderGesture {
         key: String,
@@ -623,7 +623,7 @@ impl QueuedAction {
             }
             return Vec::new();
         }
-        if let Self::ScrollerLabelClick { key, label } = self {
+        if let Self::ScrollerNodeClick { key, node_id } = self {
             let mut callback = None;
             walk_nodes(tree, "root", &mut |node, path| {
                 if matches!(node.kind.as_str(), "message-scroller" | "virtual-scroll")
@@ -631,9 +631,9 @@ impl QueuedAction {
                 {
                     walk_nodes(node, path, &mut |child, _| {
                         if callback.is_none()
-                            && child.kind == "label"
+                            && matches!(child.kind.as_str(), "label" | "hstack" | "vstack")
                             && !child.disabled
-                            && child.id.as_deref() == Some(label.as_str())
+                            && child.id.as_deref() == Some(node_id.as_str())
                         {
                             callback = child.on_click.clone();
                         }
@@ -648,7 +648,7 @@ impl QueuedAction {
         let key = match self {
             Self::DialogInput { key, .. } => key,
             Self::ButtonClick { key }
-            | Self::ScrollerLabelClick { key, .. }
+            | Self::ScrollerNodeClick { key, .. }
             | Self::SliderGesture { key, .. }
             | Self::DialogClose { key, .. }
             | Self::PopoverOpen { key, .. }
@@ -664,7 +664,7 @@ impl QueuedAction {
             let kind_matches = match self {
                 Self::DialogInput { .. } => false, // resolved in its dialog above
                 Self::ButtonClick { .. } => node.kind == "button",
-                Self::ScrollerLabelClick { .. } => false, // resolved in its scroller above
+                Self::ScrollerNodeClick { .. } => false, // resolved in its scroller above
                 Self::SliderGesture { .. } => node.kind == "slider",
                 Self::DialogClose { .. } => is_dialog_kind(&node.kind),
                 Self::PopoverOpen { .. } => matches!(node.kind.as_str(), "popover" | "native-menu"),
@@ -1115,6 +1115,42 @@ fn paint_following_static_tree(
         .into_any_element()
 }
 
+// Virtual rows can outlive the callback IDs that painted them. Resolve named
+// stacks and labels through the same scroller-scoped queue at dispatch time.
+fn static_click_handler(
+    node: &Node,
+    cmd_tx: Option<&mpsc::Sender<Cmd>>,
+    scroller: Option<&ScrollerPaintContext>,
+) -> Option<impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static> {
+    if node.disabled {
+        return None;
+    }
+    let id = node.on_click.clone()?;
+    let tx = cmd_tx?.clone();
+    let action = scroller
+        .zip(node.id.as_ref().filter(|id| !id.is_empty()))
+        .map(|(context, node_id)| {
+            (
+                context.emit.clone(),
+                QueuedAction::ScrollerNodeClick {
+                    key: context.key.clone(),
+                    node_id: node_id.clone(),
+                },
+            )
+        });
+    Some(move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut App| {
+        if let Some((emit, action)) = &action {
+            emit(action.clone(), cx);
+        } else {
+            let _ = tx.send(Cmd::Callback {
+                id: id.clone(),
+                value: None,
+                seq: None,
+            });
+        }
+    })
+}
+
 fn paint_static_contents(
     node: &Node,
     path: &str,
@@ -1189,28 +1225,29 @@ fn paint_static_contents(
             }
             chart_layout(button, node).into_any_element()
         }
-        "hstack" => chart_layout(h_flex().gap(px(node.gap.unwrap_or(8.))), node)
-            .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_following_static_tree(
-                    child,
-                    &static_child_path(path, child_ix),
-                    cmd_tx,
-                    cx,
-                    scroller,
-                )
-            }))
-            .into_any_element(),
-        "vstack" => chart_layout(v_flex().gap(px(node.gap.unwrap_or(8.))), node)
-            .children(node.children.iter().enumerate().map(|(child_ix, child)| {
-                paint_following_static_tree(
-                    child,
-                    &static_child_path(path, child_ix),
-                    cmd_tx,
-                    cx,
-                    scroller,
-                )
-            }))
-            .into_any_element(),
+        "hstack" | "vstack" => {
+            let stack = if node.kind == "hstack" {
+                h_flex()
+            } else {
+                v_flex()
+            };
+            let mut stack = chart_layout(stack.gap(px(node.gap.unwrap_or(8.))), node)
+                .id(SharedString::from(node_key(node, path)))
+                .test_support()
+                .children(node.children.iter().enumerate().map(|(child_ix, child)| {
+                    paint_following_static_tree(
+                        child,
+                        &static_child_path(path, child_ix),
+                        cmd_tx,
+                        cx,
+                        scroller,
+                    )
+                }));
+            if let Some(click) = static_click_handler(node, cmd_tx, scroller) {
+                stack = stack.cursor_pointer().on_click(click);
+            }
+            stack.into_any_element()
+        }
         "spacer" => {
             let mut el = chart_layout(div().id(SharedString::from(path.to_string())), node);
             if node.size.is_none() && node.flex.is_none() {
@@ -1444,36 +1481,14 @@ fn paint_static_contents(
         }
         "label" => {
             let label = chart_layout(mapping::kit_label(node), node);
-            if let (Some(id), Some(tx)) = (node.on_click.clone(), cmd_tx) {
-                let tx = tx.clone();
-                let action = scroller
-                    .zip(node.id.as_ref().filter(|id| !id.is_empty()))
-                    .map(|(context, label)| {
-                        (
-                            context.emit.clone(),
-                            QueuedAction::ScrollerLabelClick {
-                                key: context.key.clone(),
-                                label: label.clone(),
-                            },
-                        )
-                    });
+            if let Some(click) = static_click_handler(node, cmd_tx, scroller) {
                 div()
                     .id(SharedString::from(path.to_string()))
                     .test_support()
                     .debug_selector(|| "clickable-static-label".into())
                     .cursor_pointer()
                     .child(label)
-                    .on_click(move |_, _, cx| {
-                        if let Some((emit, action)) = &action {
-                            emit(action.clone(), cx);
-                        } else {
-                            let _ = tx.send(Cmd::Callback {
-                                id: id.clone(),
-                                value: None,
-                                seq: None,
-                            });
-                        }
-                    })
+                    .on_click(click)
                     .into_any_element()
             } else {
                 label.into_any_element()
@@ -2664,9 +2679,9 @@ mod tests {
         queue.render_requested();
         queue.render_requested();
         for label in ["word-4200", "word-5200"] {
-            queue.push(QueuedAction::ScrollerLabelClick {
+            queue.push(QueuedAction::ScrollerNodeClick {
                 key: "episode-a".into(),
-                label: label.into(),
+                node_id: label.into(),
             });
         }
         assert!(queue.next(&tree("stale")).is_none());
@@ -2703,9 +2718,9 @@ mod tests {
                 ]
             }]}))
         };
-        let action = QueuedAction::ScrollerLabelClick {
+        let action = QueuedAction::ScrollerNodeClick {
             key: "episode-a".into(),
-            label: "word-4200".into(),
+            node_id: "word-4200".into(),
         };
         assert_eq!(
             action.resolve(&tree(
@@ -2728,6 +2743,55 @@ mod tests {
             queue.next(&node(other_episode)).is_none(),
             "switching episodes must drop the old click even if the word ID is reused"
         );
+    }
+
+    #[test]
+    fn scroller_stack_clicks_use_current_callbacks_and_ignore_unavailable_rows() {
+        for scroller in ["virtual-scroll", "message-scroller"] {
+            for kind in ["vstack", "hstack"] {
+                let tree = |row: Value| {
+                    node(json!({"type": "window", "children": [
+                        {"type": scroller, "id": "other-results", "children": [
+                            {"type": kind, "id": "result", "on-click": "wrong-scroller"}
+                        ]},
+                        {"type": scroller, "id": "results", "children": [row]}
+                    ]}))
+                };
+                let action = QueuedAction::ScrollerNodeClick {
+                    key: "results".into(),
+                    node_id: "result".into(),
+                };
+                let mut queue = CallbackQueue::default();
+                queue.render_requested();
+                queue.push(action.clone());
+                assert!(
+                    queue
+                        .next(&tree(json!({
+                            "type": kind, "id": "result", "on-click": "stale"
+                        })))
+                        .is_none()
+                );
+                queue.tree_installed(None);
+                assert_eq!(
+                    queue
+                        .next(&tree(json!({
+                            "type": kind, "id": "result", "on-click": "current"
+                        })))
+                        .unwrap(),
+                    vec![protocol::CallbackCall::fire("current")]
+                );
+                for unavailable in [
+                    json!({"type": kind, "id": "result", "disabled": true, "on-click": "disabled"}),
+                    json!({"type": kind, "id": "result"}),
+                    json!({"type": kind, "id": "replaced", "on-click": "different-result"}),
+                ] {
+                    assert!(action.resolve(&tree(unavailable)).is_empty());
+                }
+                assert!(action.resolve(&node(json!({"type": scroller, "id": "other-results",
+                    "children": [{"type": kind, "id": "result", "on-click": "wrong-scroller"}]
+                }))).is_empty());
+            }
+        }
     }
 
     #[test]

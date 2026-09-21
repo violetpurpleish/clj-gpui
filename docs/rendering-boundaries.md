@@ -135,3 +135,23 @@ Kit `src/button/button.rs`, `ButtonVariant::outline_background` / `bg_color`, ap
 `colors.color.mix_oklab(cx.theme().transparent, 0.2)` for a custom variant's
 normal background. The host forwards the supplied custom variant. This
 intentional Kit color treatment remains unchanged.
+
+## Clickable stacks in virtual scrollers
+
+The host's shared static renderer previously painted `hstack` and `vstack`
+children without attaching their `on-click` handlers. This affected entire
+clickable rows in `virtual-scroll` and `message-scroller`; the normal RootView
+stack renderer already supported these callbacks. The missing handler was in
+clj-gpui, not GPUI Kit.
+
+Static stacks now attach their native click handler without a wrapper or a
+button substitution, preserving their layout and padding. Named stacks and
+labels use a scroller-scoped queued action, resolved against the current tree
+when sent to Clojure. Disabled or removed targets are ignored, and a matching
+node ID in another scroller cannot receive the click. Use stable IDs for
+clickable rows and descendants.
+
+The production-renderer regression clicks text and empty padding on both stack
+types in both scrollers, checks unchanged bounds, refreshes callback IDs, and
+checks disabled targets. Callback-queue tests cover refreshes and scroller
+identity. Native applications need a rebuilt host and a full restart.

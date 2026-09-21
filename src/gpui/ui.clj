@@ -845,8 +845,9 @@
   Changing the row identities resets the list; paint-only updates keep it.
 
   Rows support stacks, labels, compound buttons, and other static widgets.
-  Give buttons and `ui/input` fields stable ids. Inputs retain their native
-  state offscreen; buttons use the current callback registry. Other stateful
+  Stacks and labels support `:on-click`, including clicks on stack padding.
+  Give clickable nodes and `ui/input` fields stable ids. Inputs retain their
+  native state offscreen; clicks use the current callback registry. Other stateful
   widgets (list, data-table, editor) are not supported inside rows."
   [& args]
   (let [[style children] (split-style-children args)]

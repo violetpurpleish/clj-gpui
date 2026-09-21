@@ -562,6 +562,104 @@ fn transcript_follow_tree(passage: usize, word: usize, width: usize, generation:
 }
 
 #[gpui_kit::test]
+async fn virtual_scroller_stacks_click_through_text_and_padding_after_refresh(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        syntax::init(cx);
+    });
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(360.), px(280.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let tree = |scroller: &str, kind: &str, callback: &str, disabled: bool| {
+        serde_json::from_value(json!({"type": "window", "children": [{
+            "type": scroller, "id": "results", "width": 320, "height": 240,
+            "scroll-to-item": "result", "jump-button": false,
+            "children": [{"type": kind, "id": "result", "width": 300, "height": 120,
+                "padding": 20, "on-click": callback, "disabled": disabled,
+                "children": [{"type": "label", "text": "Transcript search result"}]}]
+        }]}))
+        .unwrap()
+    };
+    let mut acknowledged = None;
+    for scroller in ["virtual-scroll", "message-scroller"] {
+        for kind in ["vstack", "hstack"] {
+            for (callback, padding, disabled) in [
+                ("old", false, false),
+                ("current", true, false),
+                ("disabled", false, true),
+            ] {
+                event_tx
+                    .send(HostEvent::tree(
+                        tree(scroller, kind, callback, disabled),
+                        acknowledged.take(),
+                        vec![],
+                    ))
+                    .await
+                    .unwrap();
+                settle_root(handle, cx);
+                drain(&cmd_rx);
+                cx.update_window(handle.into(), |_, window, cx| {
+                    let bounds = window.find("result").bounds();
+                    assert_eq!(bounds.size.width, px(300.));
+                    assert_eq!(bounds.size.height, px(120.));
+                    // The first point hits the text; the second hits otherwise
+                    // empty container padding. Neither needs a nested button.
+                    let position = bounds.origin
+                        + if padding {
+                            point(px(8.), px(100.))
+                        } else {
+                            point(px(35.), px(30.))
+                        };
+                    window.dispatch_event(
+                        gpui_kit::MouseMoveEvent {
+                            position,
+                            ..Default::default()
+                        }
+                        .to_platform_input(),
+                        cx,
+                    );
+                    window.dispatch_event(
+                        gpui_kit::MouseDownEvent {
+                            position,
+                            button: MouseButton::Left,
+                            click_count: 1,
+                            ..Default::default()
+                        }
+                        .to_platform_input(),
+                        cx,
+                    );
+                    window.dispatch_event(
+                        gpui_kit::MouseUpEvent {
+                            position,
+                            button: MouseButton::Left,
+                            click_count: 1,
+                            ..Default::default()
+                        }
+                        .to_platform_input(),
+                        cx,
+                    );
+                })
+                .unwrap();
+                cx.run_until_parked();
+                let commands = drain(&cmd_rx);
+                if disabled {
+                    assert!(callback_pairs(&commands).is_empty());
+                } else {
+                    assert_eq!(callback_pairs(&commands), vec![(callback.into(), None)]);
+                    acknowledged = callback_sequence(&commands);
+                    assert!(acknowledged.is_some());
+                }
+            }
+        }
+    }
+}
+
+#[gpui_kit::test]
 async fn transcript_follow_keeps_wrapped_line_at_top_after_seeks_and_resize(
     cx: &mut TestAppContext,
 ) {
