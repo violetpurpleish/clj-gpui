@@ -85,31 +85,25 @@ use std::time::Duration;
 
 struct InputSlot {
     state: Entity<InputState>,
-    /// Dialog events share the overlay generation barrier. Revision latches
-    /// prevent an older change response from replacing newer native typing.
-    dialog_revision: Option<u64>,
-    dialog_ack_revision: u64,
-    dialog_echo: Option<(u64, u64)>,
-    dialog_submit_pending: bool,
-    dialog_last_value: String,
+    /// All input events share the callback registry barrier. Revisions keep
+    /// older responses from replacing newer native typing, even after blur.
+    in_dialog: bool,
+    revision: u64,
+    ack_revision: u64,
+    echo: Option<(u64, u64)>,
+    sync_revision: Option<u64>,
+    submit_pending: bool,
+    last_value: String,
     on_change: Option<String>,
     on_submit: Option<String>,
     on_blur: Option<String>,
     on_escape: Option<String>,
-    /// When set, ignore `Change` and wait for the tree that follows this submit.
-    wait_for_seq: Option<u64>,
-    /// Submitted string; a late `Change` echoing it must not restore the draft.
-    submitted: Option<String>,
     /// NumberInput: emit JSON numbers and honor step/min/max.
     as_number: bool,
     number_min: Option<f32>,
     number_max: Option<f32>,
     number_step: Option<f32>,
     number_stepped: bool,
-    /// Undo/redo groups and fast typing emit several Change events;
-    /// flush once per callback-id generation. See
-    /// `protocol::InputChangeCoalesce`.
-    change: protocol::InputChangeCoalesce,
     /// Last Clojure `:masked`. Native mask-toggle may differ until this
     /// changes or `:mask-toggle` is removed.
     masked: bool,
@@ -133,7 +127,6 @@ struct TextControlSlot<S> {
 }
 
 enum TextFlush {
-    Input,
     Textarea,
     Editor,
 }
@@ -801,6 +794,22 @@ impl RootView {
                             view.tree = Some(Rc::from(tree));
                             view.tree_revision += 1;
                             view.tree_seq = seq;
+                            // A later background tree may arrive before this
+                            // one paints. Acknowledge input events on receipt.
+                            for slot in view.inputs.values_mut() {
+                                if let Some((sent_seq, revision)) = slot.echo
+                                    && seq == Some(sent_seq)
+                                {
+                                    slot.echo = None;
+                                    slot.ack_revision = revision;
+                                    if slot.in_dialog || slot.submit_pending {
+                                        slot.sync_revision = Some(revision);
+                                    }
+                                    if slot.revision == revision {
+                                        slot.submit_pending = false;
+                                    }
+                                }
+                            }
                             view.callback_queue.tree_installed(seq);
                             view.flush_callback_queue();
                             view.error = None;
@@ -816,12 +825,10 @@ impl RootView {
                         HostEvent::Error(err) => {
                             view.callback_queue.clear();
                             for slot in view.inputs.values_mut() {
-                                slot.wait_for_seq = None;
-                                slot.submitted = None;
-                                slot.change.clear();
-                                slot.dialog_echo = None;
-                                slot.dialog_ack_revision = slot.dialog_revision.unwrap_or(0);
-                                slot.dialog_submit_pending = false;
+                                slot.echo = None;
+                                slot.sync_revision = None;
+                                slot.ack_revision = slot.revision;
+                                slot.submit_pending = false;
                             }
                             for slot in view.textareas.values_mut() {
                                 slot.wait_for_seq = None;
@@ -974,29 +981,23 @@ impl RootView {
     }
 
     fn handle_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let dialog_key = self.inputs.iter().find_map(|(key, slot)| {
-            (slot.dialog_revision.is_some()
-                && slot.on_escape.is_some()
-                && slot.state.read(cx).focus_handle(cx).is_focused(window))
-            .then(|| key.clone())
+        let input_key = self.inputs.iter().find_map(|(key, slot)| {
+            (slot.on_escape.is_some() && slot.state.read(cx).focus_handle(cx).is_focused(window))
+                .then(|| key.clone())
         });
-        if let Some(key) = dialog_key {
-            self.queue_dialog_input(&key, overlay::DialogInputEvent::Escape, String::new());
+        if let Some(key) = input_key {
+            self.queue_input(&key, overlay::TextInputEvent::Escape, String::new());
+            self.flush_callback_queue();
             return;
         }
         let focused = self
-            .inputs
+            .editors
             .values()
             .filter_map(|slot| {
                 slot.on_escape
                     .clone()
                     .map(|id| (id, slot.state.read(cx).focus_handle(cx)))
             })
-            .chain(self.editors.values().filter_map(|slot| {
-                slot.on_escape
-                    .clone()
-                    .map(|id| (id, slot.state.read(cx).focus_handle(cx)))
-            }))
             .chain(self.textareas.values().filter_map(|slot| {
                 slot.on_escape
                     .clone()
@@ -1168,42 +1169,43 @@ impl RootView {
         if let Some(echo) = outbound.input_echo
             && let Some(slot) = self.inputs.get_mut(&echo.key)
         {
-            slot.dialog_echo = Some((seq, echo.revision));
+            slot.echo = Some((seq, echo.revision));
         }
         Some(seq)
     }
 
-    fn queue_dialog_input(&mut self, key: &str, event: overlay::DialogInputEvent, value: String) {
-        use overlay::DialogInputEvent;
+    /// Record native intent now; resolve its callback only when the registry
+    /// is ready. The caller defers flushing to coalesce one GPUI effect.
+    fn queue_input(&mut self, key: &str, event: overlay::TextInputEvent, value: String) -> bool {
+        use overlay::TextInputEvent;
         let Some(slot) = self.inputs.get_mut(key) else {
-            return;
+            return false;
         };
         let has_callback = match event {
-            DialogInputEvent::Change => slot.on_change.is_some(),
-            DialogInputEvent::Submit => slot.on_submit.is_some(),
-            DialogInputEvent::Blur => slot.on_blur.is_some(),
-            DialogInputEvent::Escape => slot.on_escape.is_some(),
+            TextInputEvent::Change => slot.on_change.is_some(),
+            TextInputEvent::Submit => slot.on_submit.is_some(),
+            TextInputEvent::Blur => slot.on_blur.is_some(),
+            TextInputEvent::Escape => slot.on_escape.is_some(),
         };
-        if !has_callback || slot.dialog_submit_pending {
-            return;
+        if !has_callback || slot.submit_pending {
+            return false;
         }
-        if event == DialogInputEvent::Change && slot.dialog_last_value == value {
-            return;
+        if event == TextInputEvent::Change && slot.last_value == value {
+            return false;
         }
-        slot.dialog_last_value = value.clone();
-        let Some(revision) = slot.dialog_revision.as_mut() else {
-            return;
-        };
-        *revision += 1;
-        slot.dialog_submit_pending = event == DialogInputEvent::Submit;
-        self.callback_queue
-            .push(overlay::QueuedAction::DialogInput {
-                key: key.to_string(),
-                event,
-                value,
-                revision: *revision,
-            });
-        self.flush_callback_queue();
+        if event != TextInputEvent::Escape {
+            slot.last_value = value.clone();
+        }
+        slot.revision += 1;
+        slot.submit_pending = event == TextInputEvent::Submit;
+        self.callback_queue.push(overlay::QueuedAction::Input {
+            key: key.to_string(),
+            dialog: slot.in_dialog,
+            event,
+            value,
+            revision: slot.revision,
+        });
+        true
     }
 
     fn install_slider_echo_latch(&mut self, seq: u64, echo: Option<overlay::SliderEcho>) {
@@ -1288,28 +1290,6 @@ impl RootView {
 
     fn flush_input_change(&mut self, key: &str, kind: TextFlush) {
         let flushed = match kind {
-            TextFlush::Input => {
-                let Some(slot) = self.inputs.get_mut(key) else {
-                    return;
-                };
-                if slot.wait_for_seq.is_some() {
-                    slot.change.clear();
-                    return;
-                }
-                let Some(value) = slot.change.take_pending() else {
-                    return;
-                };
-                if slot.submitted.as_ref() == Some(&value) {
-                    slot.change.clear();
-                    return;
-                }
-                slot.submitted = None;
-                let Some(id) = slot.on_change.clone() else {
-                    slot.change.clear();
-                    return;
-                };
-                extra::input_change_payload(slot.as_number, &value).map(|payload| (id, payload))
-            }
             TextFlush::Textarea => self
                 .textareas
                 .get_mut(key)
@@ -1334,7 +1314,6 @@ impl RootView {
         self.used_inputs.insert(key.to_string());
 
         if let Some(slot) = self.inputs.get_mut(key) {
-            let id_changed = slot.on_change != node.on_change;
             slot.on_change = node.on_change.clone();
             slot.on_submit = node.on_submit.clone();
             slot.on_blur = node.on_blur.clone();
@@ -1346,41 +1325,19 @@ impl RootView {
             slot.number_min = None;
             slot.number_max = None;
             slot.number_step = None;
-            let refresh = id_changed && slot.change.on_ids_refreshed();
             let state = slot.state.clone();
-            let mut force = matches!(
-                (slot.wait_for_seq, self.tree_seq),
-                (Some(wait), Some(seq)) if wait == seq
-            );
-            if let Some((seq, revision)) = slot.dialog_echo
-                && self.tree_seq == Some(seq)
-            {
-                slot.dialog_echo = None;
-                slot.dialog_ack_revision = revision;
-                if slot.dialog_revision == Some(revision) {
-                    force = true;
-                    slot.dialog_submit_pending = false;
-                }
-            }
-            let dialog_pending = slot
-                .dialog_revision
-                .is_some_and(|revision| revision > slot.dialog_ack_revision);
+            let force = slot.sync_revision.take() == Some(slot.revision);
+            let pending = slot.revision > slot.ack_revision;
             let focused = state.read(cx).focus_handle(cx).is_focused(window);
             let desired = node.text.clone().unwrap_or_default();
             let current = state.read(cx).value().to_string();
-            if current != desired
-                && (force || (!focused && slot.wait_for_seq.is_none() && !dialog_pending))
-            {
-                let desired = desired.clone();
-                if slot.dialog_revision.is_some() {
-                    slot.dialog_last_value = desired.clone();
+            if force || (!focused && !pending) {
+                slot.last_value = desired.clone();
+                if current != desired {
+                    state.update(cx, |input, cx| {
+                        input.set_value(desired, window, cx);
+                    });
                 }
-                state.update(cx, |input, cx| {
-                    input.set_value(desired, window, cx);
-                });
-            }
-            if force {
-                slot.wait_for_seq = None;
             }
             if let Some(placeholder) = node.placeholder.clone() {
                 state.update(cx, |input, cx| {
@@ -1402,9 +1359,6 @@ impl RootView {
             if node.focus && !state.read(cx).focus_handle(cx).is_focused(window) {
                 state.read(cx).focus_handle(cx).focus(window, cx);
             }
-            if refresh {
-                Self::schedule_input_change_flush(key.to_string(), TextFlush::Input, window, cx);
-            }
             return state;
         }
 
@@ -1421,23 +1375,22 @@ impl RootView {
             key.to_string(),
             InputSlot {
                 state: state.clone(),
-                dialog_revision: None,
-                dialog_ack_revision: 0,
-                dialog_echo: None,
-                dialog_submit_pending: false,
-                dialog_last_value: node.text.clone().unwrap_or_default(),
+                in_dialog: false,
+                revision: 0,
+                ack_revision: 0,
+                echo: None,
+                sync_revision: None,
+                submit_pending: false,
+                last_value: node.text.clone().unwrap_or_default(),
                 on_change: node.on_change.clone(),
                 on_submit: node.on_submit.clone(),
                 on_blur: node.on_blur.clone(),
                 on_escape: node.on_escape.clone(),
-                wait_for_seq: None,
-                submitted: None,
                 as_number: false,
                 number_min: None,
                 number_max: None,
                 number_step: None,
                 number_stepped: false,
-                change: protocol::InputChangeCoalesce::default(),
                 masked: node.masked,
                 mask_toggle: node.mask_toggle,
             },
@@ -1448,118 +1401,31 @@ impl RootView {
             &state,
             window,
             move |this, input, event: &InputEvent, window, cx| {
-                if this
-                    .inputs
-                    .get(&key_owned)
-                    .is_some_and(|slot| slot.dialog_revision.is_some())
-                {
-                    let event = match event {
-                        InputEvent::Change => Some(overlay::DialogInputEvent::Change),
-                        InputEvent::PressEnter { .. } => Some(overlay::DialogInputEvent::Submit),
-                        InputEvent::Blur => Some(overlay::DialogInputEvent::Blur),
-                        _ => None,
-                    };
-                    if let Some(event) = event {
-                        this.queue_dialog_input(
-                            &key_owned,
-                            event,
-                            input.read(cx).value().to_string(),
-                        );
-                    }
+                let event = match event {
+                    InputEvent::Change => overlay::TextInputEvent::Change,
+                    InputEvent::PressEnter { .. } => overlay::TextInputEvent::Submit,
+                    InputEvent::Blur => overlay::TextInputEvent::Blur,
+                    _ => return,
+                };
+                let value = input.read(cx).value().to_string();
+                if !this.queue_input(&key_owned, event, value) {
                     return;
                 }
-                match event {
-                    InputEvent::Change => {
-                        let Some(slot) = this.inputs.get_mut(&key_owned) else {
-                            return;
-                        };
-                        if slot.wait_for_seq.is_some() {
-                            return;
-                        }
-                        let value = input.read(cx).value().to_string();
-                        if slot.submitted.as_ref() == Some(&value) {
-                            return;
-                        }
-                        slot.submitted = None;
-                        if slot.change.on_change(value) {
-                            Self::schedule_input_change_flush(
-                                key_owned.clone(),
-                                TextFlush::Input,
-                                window,
-                                cx,
-                            );
-                        }
-                    }
-                    InputEvent::PressEnter { .. } => {
-                        this.next_submit_seq = this.next_submit_seq.saturating_add(1);
-                        let seq = this.next_submit_seq;
-                        let (on_submit, value, state, clear, as_number) = {
-                            let Some(slot) = this.inputs.get_mut(&key_owned) else {
-                                return;
-                            };
-                            let value = input.read(cx).value().to_string();
-                            slot.wait_for_seq = Some(seq);
-                            slot.submitted = Some(value.clone());
-                            let clear = !slot.as_number
-                                && slot.on_blur.is_none()
-                                && slot.on_escape.is_none();
-                            (
-                                slot.on_submit.clone(),
-                                value,
-                                slot.state.clone(),
-                                clear,
-                                slot.as_number,
-                            )
-                        };
-                        if let Some(id) = on_submit {
-                            let payload = if as_number {
-                                extra::number_from_input(&value)
-                                    .map(|n| json!(n))
-                                    .unwrap_or_else(|| json!(value.clone()))
-                            } else {
-                                json!(value.clone())
-                            };
-                            let _ = this.cmd_tx.send(Cmd::Callback {
-                                id,
-                                value: Some(payload),
-                                seq: Some(seq),
-                            });
-                        }
-                        // Compose fields (no blur/escape handlers) clear immediately so a
-                        // stale render cannot put the text back before Clojure's tree arrives.
-                        if clear {
-                            state.update(cx, |input, cx| {
-                                input.set_value("", window, cx);
-                            });
-                        }
-                    }
-                    InputEvent::Blur => {
-                        let Some(slot) = this.inputs.get(&key_owned) else {
-                            return;
-                        };
-                        if slot.wait_for_seq.is_some() {
-                            return;
-                        }
-                        let Some(id) = slot.on_blur.clone() else {
-                            return;
-                        };
-                        let as_number = slot.as_number;
-                        let value = input.read(cx).value().to_string();
-                        let payload = if as_number {
-                            extra::number_from_input(&value)
-                                .map(|n| json!(n))
-                                .unwrap_or_else(|| json!(value))
-                        } else {
-                            json!(value)
-                        };
-                        let _ = this.cmd_tx.send(Cmd::Callback {
-                            id,
-                            value: Some(payload),
-                            seq: None,
-                        });
-                    }
-                    _ => {}
+                // Compose fields clear immediately, while revision tracking
+                // protects the empty draft until the submit response arrives.
+                let clear = event == overlay::TextInputEvent::Submit
+                    && this.inputs.get(&key_owned).is_some_and(|slot| {
+                        !slot.in_dialog
+                            && !slot.as_number
+                            && slot.on_blur.is_none()
+                            && slot.on_escape.is_none()
+                    });
+                if clear {
+                    input.update(cx, |input, cx| input.set_value("", window, cx));
                 }
+                cx.defer_in(window, |this, _, _| {
+                    this.flush_callback_queue();
+                });
             },
         )
         .detach();
@@ -4177,11 +4043,7 @@ impl RootView {
                 // takes it. The post-open repaint applies the requested focus.
                 node.focus &= crate_open && self.dialog_keys.last() == Some(&spec.key);
                 let state = self.input_slot(&key, &node, window, cx);
-                self.inputs
-                    .get_mut(&key)
-                    .unwrap()
-                    .dialog_revision
-                    .get_or_insert(0);
+                self.inputs.get_mut(&key).unwrap().in_dialog = true;
                 inputs.insert(path, state);
             }
         }

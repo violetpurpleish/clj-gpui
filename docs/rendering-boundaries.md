@@ -6,6 +6,37 @@ reproductions below have not been revalidated unless noted. They distinguish
 host mapping errors from upstream behavior; no dependency fork or
 application-specific renderer is used.
 
+## Search input callback races: clj-gpui
+
+Ordinary inputs previously sent callback IDs directly while asynchronous state
+updates could replace the Clojure callback registry. Coalescing edits until an
+ID changed did not protect the first edit during an unrelated render.
+
+Inputs and number inputs now share the dialog input queue: change, submit, blur,
+and escape carry field identity and intent until pending renders and callback
+acknowledgements finish. Dispatch resolves the current callback, and consecutive
+pending edits retain the latest text. Revision tracking protects newer typing
+from older controlled values, including after focus leaves the field. Input
+acknowledgements are processed when trees arrive, even if another tree arrives
+before the next paint. Dialog fields keep their separate identity scope.
+
+Production-renderer regressions cover asynchronous search results, rapid edits,
+switching away from a search, Enter during a change, blur, Escape, and skipped
+acknowledgement paints. Native applications need a rebuilt host and a full restart.
+
+## Dialog progress and changing rows: clj-gpui
+
+The static dialog painter now forwards `progress` nodes to the same native Kit
+progress renderer used in other static contexts. It preserves values, loading
+state, colors, and layout while the open dialog receives new trees.
+
+Dialog buttons with explicit IDs now enqueue those IDs instead of positional
+content paths. This matters when a job finishes and a list row disappears while
+a Cancel click waits for the latest callback registry: the current callback for
+the same job must run, even if another job now occupies its former row. Unnamed
+buttons retain path-based dispatch. The production-renderer regression exercises
+that pending-click and row-removal sequence with a live dialog.
+
 ## Image sources: clj-gpui
 
 Both Kit `Avatar::src` (`src/avatar/avatar.rs`) and `AttachmentMedia::src`

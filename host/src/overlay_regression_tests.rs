@@ -246,22 +246,77 @@ fn dialog_then_popover_waits_for_generation_and_suppresses_native_echoes() {
 }
 
 #[test]
+fn queued_inputs_preserve_payloads_scope_and_skip_unavailable_controls() {
+    use crate::overlay::TextInputEvent;
+    let tree = |kind: &str, disabled: bool| {
+        serde_json::from_value(json!({
+        "type": "window", "children": [
+            {"type": "dialog", "id": "dialog", "open": true, "children": [
+                {"type": "input", "id": "query", "on-change": "dialog-change"}
+            ]},
+            {"type": kind, "id": "query", "disabled": disabled,
+             "on-change": "change", "on-submit": "submit", "on-blur": "blur", "on-escape": "escape"}
+        ]
+    })).unwrap()
+    };
+    let action = |event, value: &str| QueuedAction::Input {
+        dialog: false,
+        key: "query".into(),
+        event,
+        value: value.into(),
+        revision: 1,
+    };
+    let send = |tree: &Node, event, value: &str| {
+        let mut queue = CallbackQueue::default();
+        queue.push(action(event, value));
+        queue.next(tree)
+    };
+    assert_eq!(
+        send(&tree("input", false), TextInputEvent::Change, "42"),
+        Some(vec![CallbackCall::with_value("change", json!("42"))])
+    );
+    assert_eq!(
+        send(&tree("number-input", false), TextInputEvent::Change, "42"),
+        Some(vec![CallbackCall::with_value("change", json!(42.0))])
+    );
+    assert!(send(&tree("number-input", false), TextInputEvent::Change, "-").is_none());
+    assert_eq!(
+        send(&tree("number-input", false), TextInputEvent::Submit, "-"),
+        Some(vec![CallbackCall::with_value("submit", json!("-"))])
+    );
+    assert_eq!(
+        send(&tree("number-input", false), TextInputEvent::Blur, "42"),
+        Some(vec![CallbackCall::with_value("blur", json!(42.0))])
+    );
+    assert_eq!(
+        send(&tree("input", false), TextInputEvent::Escape, "ignored"),
+        Some(vec![CallbackCall::fire("escape")])
+    );
+    assert!(send(&tree("input", true), TextInputEvent::Change, "x").is_none());
+    assert!(
+        send(&tree("label", false), TextInputEvent::Change, "x").is_none(),
+        "the same ID in a dialog must not receive an ordinary input event"
+    );
+}
+
+#[test]
 fn dialog_typing_and_submit_wait_for_current_callback_registry() {
-    use crate::overlay::DialogInputEvent;
+    use crate::overlay::TextInputEvent;
     let fixture = Fixture::new();
     let tree_a = fixture.initial_tree();
     let mut queue = CallbackQueue::default();
-    let input = |event, value: &str, revision| QueuedAction::DialogInput {
+    let input = |event, value: &str, revision| QueuedAction::Input {
+        dialog: true,
         key: "dialog-input/3:ask/id/3:url".into(),
         event,
         value: value.into(),
         revision,
     };
-    queue.push(input(DialogInputEvent::Change, "h", 1));
+    queue.push(input(TextInputEvent::Change, "h", 1));
     fixture.send(&mut queue, &tree_a, 1);
-    queue.push(input(DialogInputEvent::Change, "http", 2));
-    queue.push(input(DialogInputEvent::Change, "https://example.com", 3));
-    queue.push(input(DialogInputEvent::Submit, "https://example.com", 4));
+    queue.push(input(TextInputEvent::Change, "http", 2));
+    queue.push(input(TextInputEvent::Change, "https://example.com", 3));
+    queue.push(input(TextInputEvent::Submit, "https://example.com", 4));
     assert!(queue.next(&tree_a).is_none());
     let (tree_b, seq) = fixture.tree();
     queue.tree_installed(seq);

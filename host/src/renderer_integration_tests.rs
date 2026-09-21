@@ -332,7 +332,8 @@ async fn episode_scroller_virtualizes_rich_controls_and_retains_search(cx: &mut 
     })
     .unwrap();
     cx.run_until_parked();
-    assert!(callback_pairs(&drain(&cmd_rx)).contains(&("search-old".into(), Some(json!("Ada")))));
+    let search = drain(&cmd_rx);
+    assert!(callback_pairs(&search).contains(&("search-old".into(), Some(json!("Ada")))));
 
     let started = std::time::Instant::now();
     for _ in 0..12 {
@@ -425,7 +426,7 @@ async fn episode_scroller_virtualizes_rich_controls_and_retains_search(cx: &mut 
     event_tx
         .send(HostEvent::tree(
             episode_list_tree(40, "current", "Ada"),
-            None,
+            callback_sequence(&search),
             vec![],
         ))
         .await
@@ -1093,6 +1094,288 @@ fn controls_tree(checked: bool, switched: bool, reverse: bool) -> Node {
 }
 
 #[gpui_kit::test]
+async fn search_input_waits_for_current_callbacks_and_preserves_newer_typing(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(520.), px(300.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let tree = |generation: &str, value: &str| {
+        let mut tree = fixture_tree(value, "Save", "Search results");
+        tree.children[0].on_change = Some(format!("query-{generation}"));
+        tree.children[1] = serde_json::from_value(json!({
+            "type": "input", "id": "other", "text": ""
+        }))
+        .unwrap();
+        tree
+    };
+    event_tx
+        .send(HostEvent::tree(tree("old", ""), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    drain(&cmd_rx);
+    event_tx.send(HostEvent::RenderRequested).await.unwrap();
+    settle_root(handle, cx);
+    assert!(matches!(cmd_rx.recv().unwrap(), Cmd::Render));
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.click("name", cx);
+        window.input("cou", cx);
+        window.input("ntry", cx);
+    })
+    .unwrap();
+    paint_root(handle, cx);
+    assert!(
+        drain(&cmd_rx).is_empty(),
+        "typing must wait for the replacement registry"
+    );
+
+    event_tx
+        .send(HostEvent::tree(tree("current", ""), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let changed = drain(&cmd_rx);
+    assert_eq!(
+        callback_pairs(&changed),
+        vec![("query-current".into(), Some(json!("country")))]
+    );
+    assert!(callback_sequence(&changed).is_some());
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.input(" roads", cx);
+        window.click("other", cx);
+    })
+    .unwrap();
+    paint_root(handle, cx);
+    assert!(drain(&cmd_rx).is_empty());
+
+    // An asynchronous results render cannot release the callback in flight,
+    // or overwrite later typing, even after focus has left the search field.
+    event_tx
+        .send(HostEvent::tree(tree("results", "country"), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert!(drain(&cmd_rx).is_empty());
+    cx.update_window(handle.into(), |_, window, _| {
+        assert_eq!(window.find("name").value(), Some("country roads"));
+    })
+    .unwrap();
+    event_tx
+        .send(HostEvent::tree(
+            tree("ack", "country"),
+            callback_sequence(&changed),
+            vec![],
+        ))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let latest = drain(&cmd_rx);
+    assert_eq!(
+        callback_pairs(&latest),
+        vec![("query-ack".into(), Some(json!("country roads")))]
+    );
+    event_tx
+        .send(HostEvent::tree(
+            tree("done", "country roads"),
+            callback_sequence(&latest),
+            vec![],
+        ))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert!(
+        drain(&cmd_rx).is_empty(),
+        "controlled updates must not echo another search"
+    );
+
+    event_tx.send(HostEvent::RenderRequested).await.unwrap();
+    settle_root(handle, cx);
+    drain(&cmd_rx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.click("name", cx);
+        window.input("!", cx);
+    })
+    .unwrap();
+    paint_root(handle, cx);
+    assert!(drain(&cmd_rx).is_empty());
+    let mut switched = tree("other-podcast", "");
+    switched.children[0].id = Some("different-podcast-query".into());
+    event_tx
+        .send(HostEvent::tree(switched, None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert!(
+        drain(&cmd_rx).is_empty(),
+        "a removed search must not target the next podcast"
+    );
+}
+
+#[gpui_kit::test]
+async fn input_submit_serializes_with_changes_and_survives_skipped_paints(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(520.), px(300.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let tree = |generation: &str, value: &str| {
+        let mut tree = fixture_tree(value, "Save", "Ready");
+        tree.children[0].on_change = Some(format!("change-{generation}"));
+        tree.children[0].on_submit = Some(format!("submit-{generation}"));
+        tree
+    };
+    event_tx
+        .send(HostEvent::tree(tree("old", ""), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    drain(&cmd_rx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.click("name", cx);
+        window.input("Ada", cx);
+    })
+    .unwrap();
+    paint_root(handle, cx);
+    let change = drain(&cmd_rx);
+    assert_eq!(
+        callback_pairs(&change),
+        vec![("change-old".into(), Some(json!("Ada")))]
+    );
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.press("enter", cx);
+    })
+    .unwrap();
+    paint_root(handle, cx);
+    assert!(drain(&cmd_rx).is_empty());
+    cx.update_window(handle.into(), |_, window, _| {
+        assert_eq!(
+            window.find("name").value(),
+            Some(""),
+            "compose fields clear immediately"
+        );
+    })
+    .unwrap();
+
+    event_tx
+        .send(HostEvent::tree(
+            tree("changed", "Ada"),
+            callback_sequence(&change),
+            vec![],
+        ))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let submit = drain(&cmd_rx);
+    assert_eq!(
+        callback_pairs(&submit),
+        vec![("submit-changed".into(), Some(json!("Ada")))]
+    );
+    cx.update_window(handle.into(), |_, window, _| {
+        assert_eq!(
+            window.find("name").value(),
+            Some(""),
+            "change acknowledgement cannot undo submit"
+        );
+    })
+    .unwrap();
+
+    // The acknowledgement need not be painted before the next background tree.
+    event_tx
+        .send(HostEvent::tree(
+            tree("submitted", ""),
+            callback_sequence(&submit),
+            vec![],
+        ))
+        .await
+        .unwrap();
+    event_tx
+        .send(HostEvent::tree(tree("background", ""), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert!(drain(&cmd_rx).is_empty());
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.input("Ada", cx);
+    })
+    .unwrap();
+    paint_root(handle, cx);
+    assert_eq!(
+        callback_pairs(&drain(&cmd_rx)),
+        vec![("change-background".into(), Some(json!("Ada")))],
+        "typing the same draft again must still emit a change"
+    );
+}
+
+#[gpui_kit::test]
+async fn input_blur_and_escape_wait_for_fresh_callbacks(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    for escape in [false, true] {
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let (event_tx, event_rx) = async_channel::unbounded();
+        let handle = cx.open_window(size(px(520.), px(300.)), |window, cx| {
+            let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+            Root::new(view, window, cx)
+        });
+        let tree = |generation: &str| {
+            let mut tree = fixture_tree("Ada", "Save", "Ready");
+            tree.children[0].on_blur = Some(format!("blur-{generation}"));
+            tree.children[0].on_escape = Some(format!("escape-{generation}"));
+            tree.children[1] = serde_json::from_value(json!({
+                "type": "input", "id": "other", "text": ""
+            }))
+            .unwrap();
+            tree
+        };
+        event_tx
+            .send(HostEvent::tree(tree("old"), None, vec![]))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.activate_window();
+            window.click("name", cx);
+        })
+        .unwrap();
+        drain(&cmd_rx);
+        event_tx.send(HostEvent::RenderRequested).await.unwrap();
+        settle_root(handle, cx);
+        drain(&cmd_rx);
+        cx.update_window(handle.into(), |_, window, cx| {
+            if escape {
+                window.press("escape", cx);
+            } else {
+                window.click("other", cx);
+                assert_eq!(window.find("name").focused(), Some(false));
+                assert_eq!(window.find("other").focused(), Some(true));
+            }
+        })
+        .unwrap();
+        settle_root(handle, cx);
+        assert!(drain(&cmd_rx).is_empty());
+        event_tx
+            .send(HostEvent::tree(tree("current"), None, vec![]))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        assert_eq!(
+            callback_pairs(&drain(&cmd_rx)),
+            if escape {
+                vec![("escape-current".into(), None)]
+            } else {
+                vec![("blur-current".into(), Some(json!("Ada")))]
+            }
+        );
+    }
+}
+
+#[gpui_kit::test]
 async fn production_renderer_round_trips_unicode_and_returned_tree(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
@@ -1126,21 +1409,35 @@ async fn production_renderer_round_trips_unicode_and_returned_tree(cx: &mut Test
         let input = window.find("name");
         assert_eq!(input.value(), Some("Ada λ🦀"));
         assert!(input.bounds().size.width > px(0.));
-        window.click("save", cx);
-        assert!(window.find("save").bounds().size.width > px(0.));
     })
     .unwrap();
 
-    let emitted = drain(&cmd_rx);
-    assert!(emitted.iter().any(|cmd| matches!(cmd,
+    paint_root(handle, cx);
+    let changed = drain(&cmd_rx);
+    assert!(changed.iter().any(|cmd| matches!(cmd,
         Cmd::Callback { id, value: Some(value), .. }
         if id == "name-change" && value == &json!("Ada λ🦀")
     )));
+    // A click during the change round-trip must wait for its acknowledgement.
+    cx.update_window(handle.into(), |_, window, cx| window.click("save", cx))
+        .unwrap();
+    paint_root(handle, cx);
+    assert!(drain(&cmd_rx).is_empty());
+    event_tx
+        .send(HostEvent::tree(
+            fixture_tree("Ada λ🦀", "Save", "Ready"),
+            callback_sequence(&changed),
+            vec![],
+        ))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let emitted = drain(&cmd_rx);
     let save_seq = emitted.iter().find_map(|cmd| match cmd {
         Cmd::Callback { id, seq, .. } if id == "save-click" => *seq,
         _ => None,
     });
-    assert_eq!(save_seq, Some(1));
+    assert_eq!(save_seq, Some(2));
 
     event_tx
         .send(HostEvent::tree(
@@ -2124,6 +2421,65 @@ async fn production_dialog_inputs_edit_submit_refresh_and_restore_focus(cx: &mut
         })
         .unwrap();
     }
+}
+
+#[gpui_kit::test]
+async fn dialog_job_cancel_keeps_its_identity_when_an_earlier_job_finishes(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(600.), px(500.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let tree = |jobs: &[&str], generation: &str| {
+        let children: Vec<_> = jobs
+            .iter()
+            .map(|id| {
+                json!({
+                    "type": "vstack", "gap": 8, "children": [
+                        {"type": "label", "text": id},
+                        {"type": "progress", "id": format!("progress-{id}"), "value": 25},
+                        {"type": "button", "id": format!("cancel-{id}"), "text": "Cancel",
+                         "on-click": format!("cancel-{id}-{generation}")}
+                    ]
+                })
+            })
+            .collect();
+        serde_json::from_value(json!({"type": "window", "children": [{
+            "type": "dialog", "id": "jobs", "open": true, "title": "Transcription progress",
+            "width": 500, "children": children
+        }]}))
+        .unwrap()
+    };
+    event_tx
+        .send(HostEvent::tree(tree(&["a", "b", "c"], "old"), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    drain(&cmd_rx);
+    event_tx.send(HostEvent::RenderRequested).await.unwrap();
+    cx.run_until_parked();
+    drain(&cmd_rx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.click("jobs/content/1/2", cx)
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(callback_pairs(&drain(&cmd_rx)).is_empty());
+    // A completes while the click waits for the updated callback registry.
+    // B moved from row 1 to row 0; row 1 now belongs to C.
+    event_tx
+        .send(HostEvent::tree(tree(&["b", "c"], "current"), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        callback_pairs(&drain(&cmd_rx)),
+        vec![("cancel-b-current".into(), None)]
+    );
 }
 
 #[gpui_kit::test]

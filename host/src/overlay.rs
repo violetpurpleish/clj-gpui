@@ -286,21 +286,47 @@ pub fn item_at_path<'a>(items: &'a [Item], path: &[String]) -> Option<&'a Item> 
 }
 
 fn walk_nodes(node: &Node, path: &str, visit: &mut impl FnMut(&Node, &str)) {
+    walk_node_scope(node, path, visit, true);
+}
+
+fn walk_inline_nodes(node: &Node, path: &str, visit: &mut impl FnMut(&Node, &str)) {
+    walk_node_scope(node, path, visit, false);
+}
+
+fn walk_node_scope(
+    node: &Node,
+    path: &str,
+    visit: &mut impl FnMut(&Node, &str),
+    include_dialogs: bool,
+) {
+    if !include_dialogs && is_dialog_kind(&node.kind) {
+        return;
+    }
     visit(node, path);
     if let Some(trigger) = node.trigger.as_ref() {
-        walk_nodes(trigger, &format!("{path}-trigger"), visit);
+        walk_node_scope(trigger, &format!("{path}-trigger"), visit, include_dialogs);
     }
     if let Some(footer) = node.footer.as_ref() {
-        walk_nodes(footer, &format!("{path}-footer"), visit);
+        walk_node_scope(footer, &format!("{path}-footer"), visit, include_dialogs);
     }
     for (index, child) in node.children.iter().enumerate() {
-        walk_nodes(child, &format!("{path}-{index}"), visit);
+        walk_node_scope(child, &format!("{path}-{index}"), visit, include_dialogs);
     }
     for (index, child) in node.left.iter().enumerate() {
-        walk_nodes(child, &format!("{path}-left-{index}"), visit);
+        walk_node_scope(
+            child,
+            &format!("{path}-left-{index}"),
+            visit,
+            include_dialogs,
+        );
     }
     for (index, child) in node.right.iter().enumerate() {
-        walk_nodes(child, &format!("{path}-right-{index}"), visit);
+        walk_node_scope(
+            child,
+            &format!("{path}-right-{index}"),
+            visit,
+            include_dialogs,
+        );
     }
     for (index, item) in node.items.iter().enumerate() {
         if let Some(content) = item.content.as_ref() {
@@ -310,10 +336,15 @@ fn walk_nodes(node: &Node, path: &str, visit: &mut impl FnMut(&Node, &str)) {
             } else {
                 format!("{path}-item-{index}")
             };
-            walk_nodes(content, &content_path, visit);
+            walk_node_scope(content, &content_path, visit, include_dialogs);
         }
         for (child_ix, child) in item.children.iter().enumerate() {
-            walk_nodes(child, &format!("{path}-item-{index}-{child_ix}"), visit);
+            walk_node_scope(
+                child,
+                &format!("{path}-item-{index}-{child_ix}"),
+                visit,
+                include_dialogs,
+            );
         }
     }
 }
@@ -337,9 +368,10 @@ pub fn latest_dialog_spec(live: &RefCell<Vec<DialogSpec>>, key: &str) -> Option<
 /// the next action can use the replacement callback registry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QueuedAction {
-    DialogInput {
+    Input {
+        dialog: bool,
         key: String,
-        event: DialogInputEvent,
+        event: TextInputEvent,
         value: String,
         revision: u64,
     },
@@ -396,7 +428,7 @@ pub enum QueuedAction {
 pub type ActionEmitter = Rc<dyn Fn(QueuedAction, &mut App)>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DialogInputEvent {
+pub enum TextInputEvent {
     Change,
     Submit,
     Blur,
@@ -478,17 +510,20 @@ pub struct CallbackQueue {
 
 impl CallbackQueue {
     pub fn push(&mut self, action: QueuedAction) {
-        if let QueuedAction::DialogInput {
+        if let QueuedAction::Input {
             key,
-            event: DialogInputEvent::Change,
+            dialog,
+            event: TextInputEvent::Change,
             ..
         } = &action
-            && let Some(QueuedAction::DialogInput {
+            && let Some(QueuedAction::Input {
                 key: pending_key,
-                event: DialogInputEvent::Change,
+                dialog: pending_dialog,
+                event: TextInputEvent::Change,
                 ..
             }) = self.pending.back()
             && pending_key == key
+            && pending_dialog == dialog
         {
             self.pending.pop_back();
         }
@@ -550,7 +585,7 @@ impl CallbackQueue {
                     command_echo: CommandEcho::from_action(&action),
                     slider_echo: SliderEcho::from_action(&action),
                     input_echo: match &action {
-                        QueuedAction::DialogInput { key, revision, .. } => Some(InputEcho {
+                        QueuedAction::Input { key, revision, .. } => Some(InputEcho {
                             key: key.clone(),
                             revision: *revision,
                         }),
@@ -596,33 +631,66 @@ impl CallbackQueue {
 
 impl QueuedAction {
     fn resolve(&self, tree: &Node) -> Vec<protocol::CallbackCall> {
-        if let Self::DialogInput {
-            key, event, value, ..
+        if let Self::Input {
+            key,
+            dialog,
+            event,
+            value,
+            ..
         } = self
         {
-            for spec in collect_open_dialogs(tree) {
-                for (path, node) in
-                    dialog_inputs(&spec.node.children, &format!("{}/content", spec.key))
-                {
-                    if dialog_input_key(&spec.key, &node, &path) == *key {
-                        let callback = match event {
-                            DialogInputEvent::Change => node.on_change,
-                            DialogInputEvent::Submit => node.on_submit,
-                            DialogInputEvent::Blur => node.on_blur,
-                            DialogInputEvent::Escape => node.on_escape,
-                        };
-                        return callback
-                            .map(|id| match event {
-                                DialogInputEvent::Escape => protocol::CallbackCall::fire(id),
-                                _ => protocol::CallbackCall::with_value(id, json!(value)),
-                            })
-                            .into_iter()
-                            .collect();
+            let mut found = None;
+            if *dialog {
+                for spec in collect_open_dialogs(tree) {
+                    for (path, node) in
+                        dialog_inputs(&spec.node.children, &format!("{}/content", spec.key))
+                    {
+                        if dialog_input_key(&spec.key, &node, &path) == *key {
+                            found = Some(node);
+                            break;
+                        }
                     }
                 }
+            } else {
+                walk_inline_nodes(tree, "root", &mut |node, path| {
+                    if found.is_none()
+                        && matches!(node.kind.as_str(), "input" | "number-input")
+                        && node_key(node, path) == *key
+                    {
+                        found = Some(node.clone());
+                    }
+                });
             }
-            return Vec::new();
+            let Some(node) = found.filter(|node| !node.disabled) else {
+                return Vec::new();
+            };
+            let callback = match event {
+                TextInputEvent::Change => node.on_change,
+                TextInputEvent::Submit => node.on_submit,
+                TextInputEvent::Blur => node.on_blur,
+                TextInputEvent::Escape => node.on_escape,
+            };
+            let Some(id) = callback else {
+                return Vec::new();
+            };
+            if *event == TextInputEvent::Escape {
+                return vec![protocol::CallbackCall::fire(id)];
+            }
+            let numeric = node.kind == "number-input";
+            let payload = crate::extra::input_change_payload(numeric, value);
+            // Incomplete numbers do not emit Change; Submit/Blur retain their
+            // existing string fallback so the application can validate them.
+            payload
+                .or_else(|| (*event != TextInputEvent::Change).then(|| json!(value)))
+                .map(|value| protocol::CallbackCall::with_value(id, value))
+                .into_iter()
+                .collect()
+        } else {
+            self.resolve_non_input(tree)
         }
+    }
+
+    fn resolve_non_input(&self, tree: &Node) -> Vec<protocol::CallbackCall> {
         if let Self::ScrollerNodeClick { key, node_id } = self {
             let mut callback = None;
             walk_nodes(tree, "root", &mut |node, path| {
@@ -646,7 +714,7 @@ impl QueuedAction {
                 .collect();
         }
         let key = match self {
-            Self::DialogInput { key, .. } => key,
+            Self::Input { key, .. } => key,
             Self::ButtonClick { key }
             | Self::ScrollerNodeClick { key, .. }
             | Self::SliderGesture { key, .. }
@@ -662,7 +730,7 @@ impl QueuedAction {
         let mut found = None;
         walk_nodes(tree, "root", &mut |node, path| {
             let kind_matches = match self {
-                Self::DialogInput { .. } => false, // resolved in its dialog above
+                Self::Input { .. } => false, // resolved separately above
                 Self::ButtonClick { .. } => node.kind == "button",
                 Self::ScrollerNodeClick { .. } => false, // resolved in its scroller above
                 Self::SliderGesture { .. } => node.kind == "slider",
@@ -868,7 +936,7 @@ pub fn fill_popup_menu(
 ///
 /// `path` is a stable element-id prefix (`dialog-key/content`). Nested
 /// children append `/index` so sibling stacks cannot collide. Button clicks
-/// enqueue `QueuedAction::ButtonClick` with that path; ids are resolved
+/// enqueue `QueuedAction::ButtonClick` with a supplied stable ID or that path; callbacks are resolved
 /// against the installed tree, never captured at paint.
 pub fn paint_static(
     nodes: &[Node],
@@ -1622,7 +1690,7 @@ fn paint_static_node(
             button = apply_button_chrome(button, node, cx);
             if node.on_click.is_some() {
                 let emit = emit.clone();
-                let key = path.to_string();
+                let key = node_key(node, path);
                 button = button.on_click(move |_, _, cx| {
                     emit(QueuedAction::ButtonClick { key: key.clone() }, cx);
                 });
@@ -1659,6 +1727,7 @@ fn paint_static_node(
             node,
         )
         .into_any_element(),
+        "progress" => paint_chart_element(node, &node_key(node, path), cx),
         "separator" => gpui_component::separator::Separator::horizontal().into_any_element(),
         "icon" => {
             let name = node.icon.as_deref().or(node.text.as_deref()).unwrap_or("");

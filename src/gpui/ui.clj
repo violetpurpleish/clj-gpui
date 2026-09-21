@@ -1723,12 +1723,14 @@
   are Kit `DialogButtonProps`. `:close-button` (omit = Kit true) and
   `:keyboard` (Escape; omit = Kit true) are Kit Dialog chrome.
 
-  Children may include `ui/input`, including inside stacks. Inputs keep
+  Children may include `ui/progress` and `ui/input`, including inside stacks. Inputs keep
   native editing state and use the same callbacks/chrome as in-tree inputs.
   Give each input a stable `:id`; identities are scoped to this dialog.
   `:focus true` requests focus after the dialog opens. Closing releases its
   input state and restores the previous focus. An input with `:on-submit`
   handles Enter without automatically confirming/closing the dialog.
+  Give buttons stable `:id` values when rows can be removed or reordered,
+  so queued clicks keep targeting the same item after a body update.
   Other stateful controls are
   not yet supported in dialog content.
 
