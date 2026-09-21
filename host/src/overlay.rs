@@ -285,7 +285,111 @@ pub fn item_at_path<'a>(items: &'a [Item], path: &[String]) -> Option<&'a Item> 
     selected.filter(|item| item.items.is_empty())
 }
 
-fn walk_nodes(node: &Node, path: &str, visit: &mut impl FnMut(&Node, &str)) {
+/// Assign stable structural addresses to arbitrary widget slots before any
+/// native builder captures them. Ordinary child paths retain their existing
+/// overlay/scroller addressing; slot descendants inherit their slot address.
+pub(crate) fn scope_content_paths(node: &mut Node, path: &str) {
+    node.source_path = Some(path.to_string());
+    fn slot(node: &mut Node, path: String) {
+        node.render_path = Some(path.clone());
+        scope_content_paths(node, &path);
+    }
+    for (name, content) in [
+        ("content", &mut node.content),
+        ("header", &mut node.header),
+        ("footer", &mut node.footer),
+        ("trigger", &mut node.trigger),
+        ("label-content", &mut node.label_content),
+        ("loading-content", &mut node.loading_content),
+        ("initial-content", &mut node.initial_content),
+        ("code-block-actions", &mut node.code_block_actions),
+        ("table-actions", &mut node.table_actions),
+        ("last-column-content", &mut node.last_column_content),
+        ("tooltip-content", &mut node.tooltip_content),
+        ("action", &mut node.action),
+    ] {
+        if let Some(content) = content {
+            slot(content, format!("{path}-{name}"));
+        }
+    }
+    for (name, content) in [
+        ("prefix", &mut node.prefix),
+        ("suffix", &mut node.suffix),
+        ("empty", &mut node.empty),
+        ("description", &mut node.description),
+    ] {
+        if let Some(protocol::Content::Node(content)) = content {
+            slot(content, format!("{path}-{name}"));
+        }
+    }
+    for (i, child) in node.children.iter_mut().enumerate() {
+        scope_content_paths(child, &format!("{path}-{i}"));
+    }
+    for (name, children) in [("left", &mut node.left), ("right", &mut node.right)] {
+        for (i, child) in children.iter_mut().enumerate() {
+            scope_content_paths(child, &format!("{path}-{name}-{i}"));
+        }
+    }
+    fn items(items: &mut [Item], path: &str, collection: &str) {
+        for (i, item) in items.iter_mut().enumerate() {
+            let base = format!("{path}-{collection}-{i}");
+            if let Some(content) = &mut item.content {
+                slot(content, base.clone());
+            }
+            for (name, content) in [
+                ("display", &mut item.display_content),
+                ("header", &mut item.header),
+                ("footer", &mut item.footer),
+            ] {
+                if let Some(content) = content {
+                    slot(content, format!("{base}-{name}"));
+                }
+            }
+            for (i, child) in item.children.iter_mut().enumerate() {
+                slot(child, format!("{base}-{i}"));
+            }
+            if let Some(protocol::Content::Node(content)) = &mut item.suffix {
+                slot(content, format!("{base}-suffix"));
+            }
+            scope_items(&mut item.items, &base);
+        }
+    }
+    fn scope_items(children: &mut [Item], path: &str) {
+        items(children, path, "item");
+    }
+    let key = node_key(node, path);
+    for (i, row) in node.items.iter_mut().enumerate() {
+        // Clone row metadata before borrowing its cells mutably.
+        let row_meta = Item {
+            id: row.id.clone(),
+            ..Item::default()
+        };
+        for (j, cell) in row.cells.iter_mut().enumerate() {
+            if let protocol::TableCell::Node(content) = cell {
+                slot(
+                    content,
+                    crate::rows::table_row_cell_path(&key, &row_meta, i, &node.options, j),
+                );
+            }
+        }
+    }
+    items(
+        &mut node.items,
+        path,
+        if node.kind == "accordion" {
+            "acc"
+        } else {
+            "item"
+        },
+    );
+    items(&mut node.options, path, "option");
+    items(&mut node.context_menu, path, "context-menu");
+    for (i, group) in node.header_groups.iter_mut().enumerate() {
+        items(group, &format!("{path}-header-group-{i}"), "item");
+    }
+}
+
+pub(crate) fn walk_nodes(node: &Node, path: &str, visit: &mut impl FnMut(&Node, &str)) {
     walk_node_scope(node, path, visit, true);
 }
 
@@ -299,10 +403,52 @@ fn walk_node_scope(
     visit: &mut impl FnMut(&Node, &str),
     include_dialogs: bool,
 ) {
+    let path = node.render_path.as_deref().unwrap_or(path);
     if !include_dialogs && is_dialog_kind(&node.kind) {
         return;
     }
     visit(node, path);
+    for (name, content) in [
+        ("content", &node.content),
+        ("header", &node.header),
+        ("label-content", &node.label_content),
+        ("loading-content", &node.loading_content),
+        ("initial-content", &node.initial_content),
+        ("code-block-actions", &node.code_block_actions),
+        ("table-actions", &node.table_actions),
+        ("last-column-content", &node.last_column_content),
+        ("tooltip-content", &node.tooltip_content),
+        ("action", &node.action),
+    ] {
+        if let Some(content) = content {
+            walk_node_scope(content, &format!("{path}-{name}"), visit, include_dialogs);
+        }
+    }
+    for (name, content) in [
+        ("prefix", &node.prefix),
+        ("suffix", &node.suffix),
+        ("empty", &node.empty),
+        ("description", &node.description),
+    ] {
+        if let Some(protocol::Content::Node(content)) = content {
+            walk_node_scope(content, &format!("{path}-{name}"), visit, include_dialogs);
+        }
+    }
+    for (row_ix, row) in node.items.iter().enumerate() {
+        for (col_ix, cell) in row.cells.iter().enumerate() {
+            if let protocol::TableCell::Node(content) = cell {
+                let path = crate::rows::table_row_cell_path(
+                    &node_key(node, path),
+                    row,
+                    row_ix,
+                    &node.options,
+                    col_ix,
+                );
+                walk_node_scope(content, &path, visit, include_dialogs);
+            }
+        }
+    }
+
     if let Some(trigger) = node.trigger.as_ref() {
         walk_node_scope(trigger, &format!("{path}-trigger"), visit, include_dialogs);
     }
@@ -328,24 +474,63 @@ fn walk_node_scope(
             include_dialogs,
         );
     }
-    for (index, item) in node.items.iter().enumerate() {
-        if let Some(content) = item.content.as_ref() {
-            // Match RootView::render_accordion for children without explicit ids.
-            let content_path = if node.kind == "accordion" {
-                format!("{path}-acc-{index}")
-            } else {
-                format!("{path}-item-{index}")
-            };
-            walk_node_scope(content, &content_path, visit, include_dialogs);
+    fn walk_items(
+        items: &[Item],
+        path: &str,
+        collection: &str,
+        visit: &mut impl FnMut(&Node, &str),
+        include_dialogs: bool,
+    ) {
+        for (index, item) in items.iter().enumerate() {
+            let base = format!("{path}-{collection}-{index}");
+            if let Some(content) = &item.content {
+                walk_node_scope(content, &base, visit, include_dialogs);
+            }
+            for (name, content) in [
+                ("display", &item.display_content),
+                ("header", &item.header),
+                ("footer", &item.footer),
+            ] {
+                if let Some(content) = content {
+                    walk_node_scope(content, &format!("{base}-{name}"), visit, include_dialogs);
+                }
+            }
+            for (i, child) in item.children.iter().enumerate() {
+                walk_node_scope(child, &format!("{base}-{i}"), visit, include_dialogs);
+            }
+            if let Some(protocol::Content::Node(content)) = &item.suffix {
+                walk_node_scope(content, &format!("{base}-suffix"), visit, include_dialogs);
+            }
+            walk_items(&item.items, &base, "item", visit, include_dialogs);
         }
-        for (child_ix, child) in item.children.iter().enumerate() {
-            walk_node_scope(
-                child,
-                &format!("{path}-item-{index}-{child_ix}"),
-                visit,
-                include_dialogs,
-            );
-        }
+    }
+    walk_items(
+        &node.items,
+        path,
+        if node.kind == "accordion" {
+            "acc"
+        } else {
+            "item"
+        },
+        visit,
+        include_dialogs,
+    );
+    walk_items(&node.options, path, "option", visit, include_dialogs);
+    walk_items(
+        &node.context_menu,
+        path,
+        "context-menu",
+        visit,
+        include_dialogs,
+    );
+    for (i, group) in node.header_groups.iter().enumerate() {
+        walk_items(
+            group,
+            &format!("{path}-header-group-{i}"),
+            "item",
+            visit,
+            include_dialogs,
+        );
     }
 }
 
@@ -368,6 +553,11 @@ pub fn latest_dialog_spec(live: &RefCell<Vec<DialogSpec>>, key: &str) -> Option<
 /// the next action can use the replacement callback registry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QueuedAction {
+    WidgetValue {
+        key: String,
+        event: String,
+        value: Value,
+    },
     Input {
         dialog: bool,
         key: String,
@@ -510,6 +700,14 @@ pub struct CallbackQueue {
 
 impl CallbackQueue {
     pub fn push(&mut self, action: QueuedAction) {
+        if let QueuedAction::WidgetValue { key, event, .. } = &action
+            && matches!(
+                event.as_str(),
+                "visible-rows" | "visible-columns" | "matched-count" | "hover" | "search"
+            )
+        {
+            self.pending.retain(|pending| !matches!(pending, QueuedAction::WidgetValue{key:k,event:e,..} if k == key && e == event));
+        }
         if let QueuedAction::Input {
             key,
             dialog,
@@ -661,6 +859,9 @@ impl QueuedAction {
                     }
                 });
             }
+            if found.is_none() {
+                found = node_at_static_path(tree, key);
+            }
             let Some(node) = found.filter(|node| !node.disabled) else {
                 return Vec::new();
             };
@@ -714,7 +915,7 @@ impl QueuedAction {
                 .collect();
         }
         let key = match self {
-            Self::Input { key, .. } => key,
+            Self::Input { key, .. } | Self::WidgetValue { key, .. } => key,
             Self::ButtonClick { key }
             | Self::ScrollerNodeClick { key, .. }
             | Self::SliderGesture { key, .. }
@@ -730,17 +931,27 @@ impl QueuedAction {
         let mut found = None;
         walk_nodes(tree, "root", &mut |node, path| {
             let kind_matches = match self {
+                Self::WidgetValue { .. } => true,
                 Self::Input { .. } => false, // resolved separately above
                 Self::ButtonClick { .. } => node.kind == "button",
                 Self::ScrollerNodeClick { .. } => false, // resolved in its scroller above
                 Self::SliderGesture { .. } => node.kind == "slider",
                 Self::DialogClose { .. } => is_dialog_kind(&node.kind),
                 Self::PopoverOpen { .. } => matches!(node.kind.as_str(), "popover" | "native-menu"),
-                Self::MenuSelect { .. } => matches!(
-                    node.kind.as_str(),
-                    "dropdown-menu" | "context-menu" | "dropdown-button"
-                ),
-                Self::CljSelect { .. } => matches!(node.kind.as_str(), "native-menu" | "command"),
+                Self::MenuSelect { .. } => {
+                    !node.context_menu.is_empty()
+                        || matches!(
+                            node.kind.as_str(),
+                            "dropdown-menu" | "context-menu" | "dropdown-button" | "dock"
+                        )
+                }
+                Self::CljSelect { .. } => {
+                    !node.context_menu.is_empty()
+                        || matches!(
+                            node.kind.as_str(),
+                            "native-menu" | "app-menu-bar" | "command"
+                        )
+                }
                 Self::CommandSelect { .. }
                 | Self::CommandConfirm { .. }
                 | Self::CommandQuery { .. }
@@ -757,6 +968,24 @@ impl QueuedAction {
         }
         let Some(node) = found else { return Vec::new() };
         match self {
+            Self::WidgetValue { event, value, .. } => {
+                let callback = match event.as_str() {
+                    "paste" => node.on_paste,
+                    "hover" => node.on_hover,
+                    "link-click" => node.on_link_click,
+                    "visible-rows" => node.on_visible_rows,
+                    "visible-columns" => node.on_visible_columns,
+                    "matched-count" => node.on_matched_count,
+                    "query" => node.on_query,
+                    "search" => node.on_search,
+                    "layout-change" => node.on_layout_change,
+                    "panel-event" => node.on_panel_event,
+                    _ => None,
+                };
+                callback
+                    .map(|id| vec![protocol::CallbackCall::with_value(id, value.clone())])
+                    .unwrap_or_default()
+            }
             Self::ButtonClick { .. } if node.kind == "button" && !node.disabled => node
                 .on_click
                 .map(|id| vec![protocol::CallbackCall::fire(id)])
@@ -782,10 +1011,22 @@ impl QueuedAction {
                 .map(|id| vec![protocol::CallbackCall::with_value(id, json!(*open))])
                 .unwrap_or_default(),
             Self::MenuSelect { item_path, .. } | Self::CljSelect { item_path, .. } => {
-                let Some(item) = item_at_path(&node.items, item_path) else {
+                let context = !node.context_menu.is_empty();
+                let Some(item) = item_at_path(
+                    if context {
+                        &node.context_menu
+                    } else {
+                        &node.items
+                    },
+                    item_path,
+                ) else {
                     return Vec::new();
                 };
-                protocol::menu_selection_calls(item.on_click.clone(), node.on_change, item_path)
+                protocol::menu_selection_calls(
+                    item.on_click.clone(),
+                    if context { None } else { node.on_change },
+                    item_path,
+                )
             }
             Self::CommandSelect { item_path, .. } => {
                 if item_at_path(&node.items, item_path).is_none() {
@@ -857,6 +1098,36 @@ impl DialogClose {
     }
 }
 
+/// Declarative geometry for native popup menus (independent of trigger layout).
+pub fn configure_popup_menu(mut menu: PopupMenu, node: &Node) -> PopupMenu {
+    if let Some(width) = node.menu_width.filter(|n| n.is_finite() && *n > 0.) {
+        menu = menu.min_w(px(width)).max_w(px(width));
+    }
+    if let Some(width) = node.menu_min_w.filter(|n| n.is_finite() && *n > 0.) {
+        menu = menu.min_w(px(width));
+    }
+    if let Some(width) = node.menu_max_w.filter(|n| n.is_finite() && *n > 0.) {
+        menu = menu.max_w(px(width));
+    }
+    if let Some(height) = node.menu_max_h.filter(|n| n.is_finite() && *n > 0.) {
+        menu = menu.max_h(px(height));
+    }
+    if let Some(scrollable) = node.scrollable {
+        menu = menu.scrollable(scrollable);
+    }
+    if let Some(show) = node.external_link_icon {
+        menu = menu.external_link_icon(show);
+    }
+    if let Some(side) = &node.check_side {
+        menu = menu.check_side(if side == "right" {
+            gpui_component::Side::Right
+        } else {
+            gpui_component::Side::Left
+        });
+    }
+    menu
+}
+
 /// Fill a popup menu from Clojure `{id, label}` rows (nested `:items` are submenus).
 pub fn fill_popup_menu(
     mut menu: PopupMenu,
@@ -900,8 +1171,22 @@ pub fn fill_popup_menu(
             continue;
         }
 
+        if item.variant.as_deref() == Some("label") {
+            menu = menu.item(PopupMenuItem::label(item.label_or_id()));
+            continue;
+        }
+        if let Some(href) = &item.href {
+            menu = menu.item(
+                PopupMenuItem::link(item.label_or_id(), href.clone()).disabled(item.disabled),
+            );
+            continue;
+        }
         let id = item.id_or_label();
-        let mut entry = PopupMenuItem::new(item.label_or_id());
+        let mut entry = if let Some(content) = item.content.clone() {
+            PopupMenuItem::element(move |_, _| protocol::Content::Node(content.clone()))
+        } else {
+            PopupMenuItem::new(item.label_or_id())
+        };
         if item.disabled {
             entry = entry.disabled(true);
         }
@@ -964,14 +1249,32 @@ pub(crate) fn dialog_submit_inputs(
 /// paint paths separate from retained identities, so a stable id survives a
 /// layout change without sharing state with another dialog or the main tree.
 pub(crate) fn dialog_inputs(nodes: &[Node], path: &str) -> Vec<(String, Node)> {
+    fn collect(node: &Node, path: String, native: bool, inputs: &mut Vec<(String, Node)>) {
+        if node.kind == "input" {
+            inputs.push((path.clone(), node.clone()));
+        }
+        let native = native || !matches!(node.kind.as_str(), "hstack" | "vstack");
+        for (index, child) in node.children.iter().enumerate() {
+            let child_path = if native {
+                format!("{path}-{index}")
+            } else {
+                static_child_path(&path, index)
+            };
+            collect(child, child_path, native, inputs);
+        }
+        for (name, content) in [
+            ("content", &node.content),
+            ("header", &node.header),
+            ("footer", &node.footer),
+        ] {
+            if let Some(content) = content {
+                collect(content, format!("{path}-{name}"), true, inputs);
+            }
+        }
+    }
     let mut inputs = Vec::new();
     for (index, node) in nodes.iter().enumerate() {
-        let path = static_child_path(path, index);
-        match node.kind.as_str() {
-            "input" => inputs.push((path, node.clone())),
-            "hstack" | "vstack" => inputs.extend(dialog_inputs(&node.children, &path)),
-            _ => {}
-        }
+        collect(node, static_child_path(path, index), false, &mut inputs);
     }
     inputs
 }
@@ -1063,15 +1366,17 @@ pub(crate) fn paint_chart_element(node: &Node, path: &str, cx: Option<&App>) -> 
     paint_static_tree(node, path, None, cx)
 }
 
-/// Paint a DataTable `render_td` widget. Same RenderOnce subset as radar
-/// `:content` / scroller rows (progress, tag, badge, avatar, stacks, …),
-/// not list / data-table / editor.
+/// Paint a DataTable cell through the deferred production renderer.
+/// The fallback is used only by standalone helpers without a RootView.
 pub(crate) fn paint_table_cell(
     node: &Node,
     path: &str,
     cmd_tx: Option<&mpsc::Sender<Cmd>>,
     cx: Option<&App>,
 ) -> gpui::AnyElement {
+    if let Some(element) = crate::renderer::embedded_node(node, path, cx, None) {
+        return element;
+    }
     paint_static_tree(node, path, cmd_tx, cx)
 }
 
@@ -1093,6 +1398,7 @@ pub(crate) struct ScrollerFollow {
     pub state: gpui::Entity<gpui_component::message_scroller::MessageScrollerState>,
 }
 
+#[derive(Clone)]
 pub(crate) struct ScrollerPaintContext {
     pub key: String,
     pub emit: ActionEmitter,
@@ -1141,6 +1447,14 @@ fn paint_following_static_tree(
     scroller: Option<&ScrollerPaintContext>,
 ) -> gpui::AnyElement {
     let content = paint_static_contents(node, path, cmd_tx, cx, scroller);
+    wrap_scroller_follow(content, node, scroller)
+}
+
+pub(crate) fn wrap_scroller_follow(
+    content: gpui::AnyElement,
+    node: &Node,
+    scroller: Option<&ScrollerPaintContext>,
+) -> gpui::AnyElement {
     let Some(follow) = scroller
         .and_then(|context| context.follow.as_ref())
         .filter(|follow| node.id.as_deref() == Some(&follow.target))
@@ -1185,7 +1499,7 @@ fn paint_following_static_tree(
 
 // Virtual rows can outlive the callback IDs that painted them. Resolve named
 // stacks and labels through the same scroller-scoped queue at dispatch time.
-fn static_click_handler(
+pub(crate) fn static_click_handler(
     node: &Node,
     cmd_tx: Option<&mpsc::Sender<Cmd>>,
     scroller: Option<&ScrollerPaintContext>,
@@ -1236,6 +1550,17 @@ fn paint_static_contents(
             node,
             path,
         );
+    }
+    if (!matches!(node.kind.as_str(), "hstack" | "vstack" | "label" | "input")
+        || (node.kind == "input"
+            && !scroller.is_some_and(|context| {
+                node.id
+                    .as_ref()
+                    .is_some_and(|id| context.inputs.contains_key(id))
+            })))
+        && let Some(element) = crate::renderer::embedded_node(node, path, cx, scroller)
+    {
+        return element;
     }
     match node.kind.as_str() {
         "input" if scroller.is_some() => {
@@ -1673,6 +1998,11 @@ fn paint_static_node(
     cx: Option<&App>,
     inputs: &OverlayInputs,
 ) -> gpui::AnyElement {
+    if !matches!(node.kind.as_str(), "hstack" | "vstack" | "input")
+        && let Some(element) = crate::renderer::embedded_node(node, path, cx, None)
+    {
+        return element;
+    }
     match node.kind.as_str() {
         "input" if inputs.contains_key(path) => mapping::apply_styled(
             mapping::apply_input_chrome(
@@ -1831,6 +2161,15 @@ pub fn configure_dialog(
     }
     if let Some(width) = node.width {
         dialog = dialog.width(px(width));
+    }
+    if let Some(top) = node.margin_top {
+        dialog = dialog.margin_top(px(top));
+    }
+    if let Some(overlay) = node.overlay {
+        dialog = dialog.overlay(overlay);
+    }
+    if let Some(footer) = node.footer.clone() {
+        dialog = dialog.footer(protocol::Content::Node(footer));
     }
     dialog.extend(children);
     dialog
@@ -2070,7 +2409,7 @@ pub fn collect_notifications(root: &Node) -> Vec<NotificationSpec> {
 
 pub fn notification_fingerprint(node: &Node) -> String {
     format!(
-        "{}|{}|{}|{:?}|{}|{}",
+        "{}|{}|{}|{:?}|{}|{}|{:?}|{:?}",
         node.title.as_deref().unwrap_or(""),
         node.message
             .as_deref()
@@ -2079,7 +2418,9 @@ pub fn notification_fingerprint(node: &Node) -> String {
         node.variant.as_deref().unwrap_or(""),
         node.autohide,
         node.icon.as_deref().unwrap_or(""),
-        node.placement.as_deref().unwrap_or("")
+        node.placement.as_deref().unwrap_or(""),
+        node.delivery,
+        node.icon_svg
     )
 }
 

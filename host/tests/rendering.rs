@@ -229,6 +229,54 @@ mod macos {
         }
         std::fs::remove_file(image_path).unwrap();
 
+        // Arbitrary slots must paint production widgets, not a placeholder or
+        // a static label approximation. Both the affix and the collapsed-body
+        // editor go through the deferred renderer.
+        let parity_tree = |text: &str| {
+            serde_json::from_value(json!({
+            "type":"window", "chrome":"app", "theme":"light", "padding":20, "gap":12,
+            "children":[
+                {"type":"form", "children":[{"type":"field", "text":"Project", "children":[
+                    {"type":"input-group", "width":400,"children":[
+                        {"type":"input", "id":"parity-input", "text":"Native composition", "prefix":{"type":"hstack","width":20,"height":20,"bg":"#e6283c"}},
+                        {"type":"input-group-addon","children":[{"type":"input-group-text","text":".clj"}]}
+                    ]}
+                ]}]},
+                {"type":"collapsible", "open":true, "children":[{"type":"label","text":"Editor in a content slot"}],
+                 "content":{"type":"editor","id":"parity-editor","language":"clojure","height":150,"text":text}},
+                {"type":"empty", "children":[
+                    {"type":"empty-header", "children":[{"type":"empty-title","text":"Native Empty composition"}]},
+                    {"type":"empty-content", "children":[{"type":"button","text":"Continue","variant":"primary"}]}
+                ]}
+            ]
+        })).unwrap()
+        };
+        let mut parity_images = Vec::new();
+        for source in ["(def answer 42)", "(def answer 2048)"] {
+            event_tx
+                .send_blocking(protocol::HostEvent::tree(parity_tree(source), None, vec![]))
+                .unwrap();
+            cx.run_until_parked();
+            cx.update_window(handle.into(), |_, window, cx| window.render_frame(cx))
+                .unwrap();
+            parity_images.push(cx.capture_screenshot(handle.into()).unwrap());
+        }
+        if parity_images[0] == parity_images[1] {
+            save_failure("parity-slot-editor", &parity_images[1]);
+            panic!("editing a nested content-slot editor produced identical pixels");
+        }
+        assert!(
+            parity_images[1]
+                .pixels()
+                .filter(|pixel| pixel.0[..3] == [230, 40, 60])
+                .count()
+                >= 100,
+            "widget prefix did not paint"
+        );
+        parity_images[1]
+            .save("/private/tmp/clj-gpui-parity.png")
+            .unwrap();
+
         // The default pie radius must come from its actual layout, including
         // a flex-filled viewport taller than chart_viewport's 180px fallback.
         // Explicit and partial per-slice radii must still win.
@@ -290,6 +338,6 @@ mod macos {
             }
         }
 
-        println!("rendering: 5 passed (production RootView, Metal)");
+        println!("rendering: 6 passed (production RootView, Metal)");
     }
 }

@@ -917,8 +917,10 @@ pub fn should_set_combobox_query(current: &str, desired: Option<&str>) -> bool {
 }
 
 /// One selectable row in a Select dropdown.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SelectLeaf {
+    pub content: Option<Box<Node>>,
+    pub display_content: Option<Box<Node>>,
     pub id: String,
     pub label: String,
     pub disabled: bool,
@@ -926,14 +928,17 @@ pub struct SelectLeaf {
 }
 
 /// Kit `SelectGroup`: a named section of [`SelectLeaf`] rows.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SelectSection {
+    pub header: Option<Box<Node>>,
     pub title: String,
     pub items: Vec<SelectLeaf>,
 }
 
 pub fn select_leaf_from_item(item: &Item) -> SelectLeaf {
     SelectLeaf {
+        content: item.content.clone(),
+        display_content: item.display_content.clone(),
         id: item.id_or_label(),
         label: item.label_or_id(),
         disabled: item.disabled,
@@ -959,6 +964,7 @@ pub fn select_sections(items: &[Item]) -> Vec<SelectSection> {
     fn flush(untitled: &mut Vec<SelectLeaf>, sections: &mut Vec<SelectSection>) {
         if !untitled.is_empty() {
             sections.push(SelectSection {
+                header: None,
                 title: String::new(),
                 items: std::mem::take(untitled),
             });
@@ -970,6 +976,7 @@ pub fn select_sections(items: &[Item]) -> Vec<SelectSection> {
         } else {
             flush(&mut untitled, &mut sections);
             sections.push(SelectSection {
+                header: item.header.clone(),
                 title: item.label_or_id(),
                 items: item.items.iter().map(select_leaf_from_item).collect(),
             });
@@ -985,6 +992,9 @@ fn hash_select_item(hasher: &mut impl std::hash::Hasher, item: &Item) {
     item.label.hash(hasher);
     item.text.hash(hasher);
     item.display.hash(hasher);
+    item.content.is_some().hash(hasher);
+    item.display_content.is_some().hash(hasher);
+    item.header.is_some().hash(hasher);
     item.disabled.hash(hasher);
     item.items.len().hash(hasher);
     for child in &item.items {
@@ -2304,6 +2314,204 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
         .into_any_element()
 }
 
+pub fn text_view_style(value: &Value) -> gpui_component::text::TextViewStyle {
+    use gpui_component::text::TextViewStyle;
+    let mut style = TextViewStyle::default();
+    if let Some(gap) = value.get("paragraph-gap").and_then(Value::as_f64) {
+        style.paragraph_gap = gpui::rems(gap as f32);
+    }
+    if let Some(size) = value.get("heading-base-font-size").and_then(Value::as_f64) {
+        style.heading_base_font_size = px(size as f32);
+    }
+    if let Some(sizes) = value.get("heading-font-sizes").and_then(Value::as_array) {
+        let sizes: Vec<Option<f32>> = sizes.iter().map(|v| v.as_f64().map(|v| v as f32)).collect();
+        style = style.heading_font_size(move |level, base| {
+            sizes
+                .get(level.saturating_sub(1) as usize)
+                .and_then(|v| *v)
+                .map(px)
+                .unwrap_or(base)
+        });
+    }
+    for (key, target) in [
+        ("code-block", &mut style.code_block),
+        ("table", &mut style.table),
+        ("table-head", &mut style.table_head),
+        ("table-cell", &mut style.table_cell),
+    ] {
+        if let Some(node) = value
+            .get(key)
+            .and_then(|v| serde_json::from_value::<Node>(v.clone()).ok())
+        {
+            *target = mapping::apply_styled(div(), &node).style().clone();
+        }
+    }
+    if let Some(inline) = value.get("inline-code") {
+        style.inline_code.color = inline
+            .get("color")
+            .and_then(Value::as_str)
+            .and_then(parse_hex_color);
+        style.inline_code.background_color = inline
+            .get("bg")
+            .and_then(Value::as_str)
+            .and_then(parse_hex_color);
+        if inline.get("font-weight").and_then(Value::as_str) == Some("bold") {
+            style.inline_code.font_weight = Some(gpui::FontWeight::BOLD);
+        }
+    }
+    if let Some(dark) = value.get("is-dark").and_then(Value::as_bool) {
+        style.is_dark = dark;
+    }
+    style
+}
+
+pub fn text_view_motion(value: &Value) -> gpui_component::text::TextViewMotion {
+    use gpui_kit::base::motion::Easing;
+    let duration = |key| {
+        std::time::Duration::try_from_secs_f64(
+            value
+                .get(key)
+                .and_then(Value::as_f64)
+                .filter(|n| n.is_finite() && *n >= 0.)
+                .unwrap_or(0.),
+        )
+        .unwrap_or_default()
+    };
+    let easing = match value.get("easing").and_then(Value::as_str) {
+        Some("linear") => Easing::Linear,
+        Some("ease") => Easing::Ease,
+        Some("ease-in") => Easing::EaseIn,
+        Some("ease-in-out") => Easing::EaseInOut,
+        _ => Easing::EaseOut,
+    };
+    gpui_component::text::TextViewMotion::default()
+        .with_stream_fade(duration("duration"))
+        .with_stream_fade_stagger(duration("stagger"))
+        .with_stream_fade_easing(easing)
+}
+
+/// Declarative Markdown plugin: Clojure computes source matches and widget trees
+/// during export; Kit owns AST conversion, inline layout, selection and painting.
+struct CljMarkdownPlugin {
+    name: String,
+    item: Item,
+    source_range: Option<[usize; 2]>,
+}
+impl gpui_component::text::MarkdownPlugin for CljMarkdownPlugin {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn is_block(&self) -> bool {
+        self.item.variant.as_deref() != Some("inline")
+    }
+    fn parse(
+        &self,
+        node: &gpui_component::text::markdown_ast::Node,
+        cx: &gpui_component::text::MarkdownParseContext<'_>,
+    ) -> Option<gpui_component::text::MarkdownNode> {
+        let source = cx.node_source(node)?;
+        let [start, end] = self.source_range?;
+        let range = node.position()?;
+        if range.start.offset + cx.offset() != start || range.end.offset + cx.offset() != end {
+            return None;
+        }
+        if self
+            .item
+            .source
+            .as_ref()
+            .is_some_and(|expected| source != expected)
+        {
+            return None;
+        }
+        let text = self
+            .item
+            .text
+            .clone()
+            .or_else(|| self.item.label.clone())
+            .unwrap_or_else(|| source.to_string());
+        Some(
+            gpui_component::text::MarkdownNode::new(self.name.clone(), ())
+                .text(text)
+                .markdown(source.to_string()),
+        )
+    }
+    fn render(
+        &self,
+        node: &gpui_component::text::MarkdownNode,
+        _: &mut Window,
+        _: &mut App,
+    ) -> impl IntoElement {
+        self.item
+            .content
+            .clone()
+            .map(crate::protocol::Content::Node)
+            .unwrap_or_else(|| node.as_text().into())
+            .into_any_element()
+    }
+    fn render_inline(
+        &self,
+        node: &gpui_component::text::MarkdownNode,
+        _: &gpui_component::text::InlineRenderContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<gpui_component::text::InlineElement> {
+        // An absent widget deliberately uses Kit's atomic text fallback.
+        self.item.content.as_ref()?;
+        let mut element = gpui_component::text::InlineElement::new(self.render(node, window, cx));
+        if let Some(baseline) = self.item.baseline {
+            element = element.with_baseline(px(baseline));
+        }
+        Some(element)
+    }
+}
+
+fn markdown_extensions(node: &Node, key: &str) -> MarkdownExtensions {
+    use std::hash::{Hash, Hasher};
+    let mut extensions = MarkdownExtensions::default();
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    node.frontmatter.hash(&mut hash);
+    node.mdx.hash(&mut hash);
+    if node.frontmatter {
+        extensions = extensions.frontmatter().plugin(FrontmatterPlugin::new());
+    }
+    if node.mdx.unwrap_or(false) {
+        extensions = extensions.mdx();
+    }
+    for (index, item) in node.items.iter().enumerate() {
+        let name = format!("{key}/extension/{index}/{}", item.id_or_label());
+        name.hash(&mut hash);
+        item.source.hash(&mut hash);
+        item.source_range.hash(&mut hash);
+        item.source_pattern.hash(&mut hash);
+        item.variant.hash(&mut hash);
+        item.text.hash(&mut hash);
+        item.label.hash(&mut hash);
+        let body = node
+            .text
+            .as_deref()
+            .or(node.message.as_deref())
+            .unwrap_or("");
+        // Each recipe identifies one AST occurrence, so repeated snippets never
+        // mount the same stateful widget id twice. Use explicit ranges for repeats.
+        let source_range = item.source_range.or_else(|| {
+            if let Some(source) = &item.source {
+                body.find(source).map(|start| [start, start + source.len()])
+            } else {
+                let pattern = regex::Regex::new(item.source_pattern.as_ref()?).ok()?;
+                pattern.find(body).map(|found| [found.start(), found.end()])
+            }
+        });
+        source_range.hash(&mut hash);
+        extensions = extensions.plugin(CljMarkdownPlugin {
+            name,
+            item: item.clone(),
+            source_range,
+        });
+    }
+    // Kit permits renderer-only changes without reparsing the document.
+    extensions.parser_revision(hash.finish())
+}
+
 pub fn paint_markdown(node: &Node, key: &str) -> gpui::AnyElement {
     let body = node
         .text
@@ -2322,14 +2530,58 @@ pub fn paint_markdown(node: &Node, key: &str) -> gpui::AnyElement {
     } else {
         TextView::markdown(SharedString::from(key.to_string()), body)
     };
-    if !html && node.frontmatter {
-        view = view
-            .markdown_extensions(MarkdownExtensions::default().frontmatter())
-            .plugin(FrontmatterPlugin::new());
+    if !html {
+        view = view.markdown_extensions(markdown_extensions(node, key));
+    }
+    if let Some(style) = &node.text_style {
+        view = view.style(text_view_style(style));
+    }
+    if let Some(motion) = &node.text_motion {
+        view = view.motion(text_view_motion(motion));
     }
     view = view.selectable(node.selectable.unwrap_or(true));
     if node.height.is_some() || node.flex.unwrap_or(0.0) >= 1.0 {
         view = view.scrollable(true);
+    }
+    if let Some(scrollable) = node.scrollable {
+        view = view.scrollable(scrollable);
+    }
+    if let Some(fade) = node.stream_fade {
+        view = view.stream_fade(fade);
+    }
+    if let Some(lines) = node.max_lines {
+        view = view.max_lines(lines);
+    }
+    if let Some(format) = &node.selection_format {
+        view = view.selection_format(if format == "plain" || format == "plain-text" {
+            gpui_component::text::SelectionFormat::Plain
+        } else {
+            gpui_component::text::SelectionFormat::Source
+        });
+    }
+    if let Some(actions) = node.code_block_actions.clone() {
+        view =
+            view.code_block_actions(move |_, _, _| crate::protocol::Content::Node(actions.clone()));
+    }
+    if let Some(actions) = node.table_actions.clone() {
+        view = view.table_actions(move |_, _, _| crate::protocol::Content::Node(actions.clone()));
+    }
+    if node.on_link_click.is_some() {
+        let key = node
+            .id
+            .clone()
+            .or_else(|| node.source_path.clone())
+            .unwrap_or_else(|| key.to_string());
+        view = view.on_link_click(move |href, _, window, cx| {
+            crate::renderer::window_action_emitter(window, cx)(
+                crate::overlay::QueuedAction::WidgetValue {
+                    key: key.clone(),
+                    event: "link-click".into(),
+                    value: json!(href.as_str()),
+                },
+                cx,
+            );
+        });
     }
     view.into_any_element()
 }
@@ -2338,6 +2590,7 @@ pub fn paint_markdown(node: &Node, key: &str) -> gpui::AnyElement {
 pub struct VirtualRow {
     pub id: String,
     pub label: String,
+    pub content: Option<Box<Node>>,
     pub height: f32,
 }
 
@@ -2358,6 +2611,7 @@ impl VirtualListView {
             .map(|item| VirtualRow {
                 id: item.id_or_label(),
                 label: item.label_or_id(),
+                content: item.content.clone(),
                 height: item.height.unwrap_or(36.0).max(18.0),
             })
             .collect();
@@ -2402,7 +2656,11 @@ impl VirtualListView {
                     .when(selected, |this| {
                         this.font_weight(gpui::FontWeight::SEMIBOLD).bg(accent)
                     })
-                    .child(row.label)
+                    .child(
+                        row.content
+                            .map(|node| protocol::Content::Node(node).into_any_element())
+                            .unwrap_or_else(|| row.label.into_any_element()),
+                    )
                     .on_click(move |_, _, _| {
                         if let Some(callback) = on_change.clone() {
                             protocol::send_callbacks(
@@ -2451,6 +2709,8 @@ impl Render for VirtualListView {
 /// after `RootView::render` returns, so slot retain has already run — dock
 /// bodies use the static overlay painter plus markdown.
 pub struct CljPanel {
+    pub dock_key: String,
+    pub spec: Item,
     pub title: SharedString,
     pub live: Rc<RefCell<Node>>,
     pub path: String,
@@ -2460,6 +2720,8 @@ pub struct CljPanel {
 
 impl CljPanel {
     pub fn new(
+        dock_key: String,
+        spec: Item,
         title: impl Into<SharedString>,
         live: Rc<RefCell<Node>>,
         path: String,
@@ -2467,12 +2729,23 @@ impl CljPanel {
         focus: FocusHandle,
     ) -> Self {
         Self {
+            dock_key,
+            spec,
             title: title.into(),
             live,
             path,
             emit,
             focus,
         }
+    }
+    fn emit_event(&self, event: &str, value: Value, cx: &mut Context<Self>) {
+        let emit = self.emit.clone();
+        let action = crate::overlay::QueuedAction::WidgetValue {
+            key: self.dock_key.clone(),
+            event: "panel-event".into(),
+            value: json!({"id":self.spec.id_or_label(),"event":event,"value":value}),
+        };
+        cx.defer(move |cx| emit(action, cx));
     }
 }
 
@@ -2498,6 +2771,9 @@ pub fn paint_panel_body(
     _window: &mut Window,
     cx: &mut App,
 ) -> gpui::AnyElement {
+    if let Some(element) = crate::renderer::embedded_node(node, path, Some(cx), None) {
+        return element;
+    }
     match node.kind.as_str() {
         "markdown" | "html" => paint_markdown(node, path),
         "chart" => {
@@ -2517,32 +2793,148 @@ pub fn paint_panel_body(
 }
 
 impl gpui::base::dock::Panel for CljPanel {
+    fn set_active(&mut self, active: bool, _: &mut Window, cx: &mut Context<Self>) {
+        self.emit_event("active", json!(active), cx);
+    }
+    fn set_zoomed(&mut self, zoomed: bool, _: &mut Window, cx: &mut Context<Self>) {
+        self.emit_event("zoomed", json!(zoomed), cx);
+    }
+    fn on_added_to(
+        &mut self,
+        _: gpui::WeakEntity<gpui::base::dock::TabGroup>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.emit_event("added", Value::Null, cx);
+    }
+    fn on_removed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.emit_event("removed", Value::Null, cx);
+    }
+    fn dump(&self, _: &App) -> gpui::base::dock::PanelState {
+        let mut state = gpui::base::dock::PanelState::new("clj-gpui-panel");
+        state.info = gpui::base::dock::PanelInfo::panel(json!({"id": self.spec.id_or_label()}));
+        state
+    }
     fn panel_name(&self) -> &'static str {
         "clj-gpui-panel"
     }
-
     fn closable(&self, _: &App) -> bool {
-        false
+        self.spec.closable.unwrap_or(false)
     }
-
     fn zoomable(&self, _: &App) -> bool {
-        false
+        self.spec.zoomable.unwrap_or(false)
+    }
+    fn visible(&self, _: &App) -> bool {
+        self.spec.visible.unwrap_or(true)
     }
 }
-
 impl StyledPanel for CljPanel {
-    fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        self.title.clone()
+    fn toolbar_buttons(
+        &mut self,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Vec<gpui_component::button::Button>> {
+        if self.spec.children.is_empty() {
+            return None;
+        }
+        Some(
+            self.spec
+                .children
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| node.kind == "button")
+                .map(|(i, node)| {
+                    let key = node
+                        .id
+                        .clone()
+                        .or_else(|| node.source_path.clone())
+                        .unwrap_or_else(|| format!("{}-toolbar-{i}", self.path));
+                    let mut button = crate::overlay::apply_button_chrome(
+                        gpui_component::button::Button::new(SharedString::from(key.clone())),
+                        node,
+                        Some(cx),
+                    );
+                    if let Some(text) = &node.text {
+                        button = button.label(text.clone());
+                    }
+                    button = button.children(
+                        node.children
+                            .iter()
+                            .cloned()
+                            .map(|child| protocol::Content::Node(Box::new(child))),
+                    );
+                    if node.on_click.is_some() {
+                        let emit = self.emit.clone();
+                        button = button.on_click(move |_, _, cx| {
+                            emit(
+                                crate::overlay::QueuedAction::ButtonClick { key: key.clone() },
+                                cx,
+                            )
+                        });
+                    }
+                    mapping::apply_styled(button, node)
+                })
+                .collect(),
+        )
     }
-
+    fn dropdown_menu(
+        &mut self,
+        menu: gpui_component::menu::PopupMenu,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_component::menu::PopupMenu {
+        crate::overlay::fill_popup_menu(
+            menu,
+            &self.spec.items,
+            &self.dock_key,
+            &[self.spec.id_or_label()],
+            self.emit.clone(),
+            window,
+            cx,
+        )
+    }
+    fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.spec
+            .header
+            .clone()
+            .map(|node| protocol::Content::Node(node).into_any_element())
+            .unwrap_or_else(|| self.title.clone().into_any_element())
+    }
+    fn tab_name(&self, _: &App) -> Option<SharedString> {
+        self.spec.tab_name.clone().map(Into::into)
+    }
+    fn title_style(&self, _: &App) -> Option<gpui_component::dock::TitleStyle> {
+        let style = self.spec.title_style.as_ref()?;
+        Some(gpui_component::dock::TitleStyle {
+            background: parse_hex_color(style.bg.as_deref()?)?,
+            foreground: parse_hex_color(style.color.as_deref()?)?,
+        })
+    }
+    fn title_suffix(&mut self, _: &mut Window, _: &mut Context<Self>) -> Option<impl IntoElement> {
+        self.spec.suffix.clone()
+    }
+    fn title_bar(&self, _: &App) -> bool {
+        self.spec.title_bar.unwrap_or(true)
+    }
+    fn inner_padding(&self, _: &App) -> bool {
+        self.spec.inner_padding.unwrap_or(true)
+    }
     fn zoom_control(&self, _: &App) -> Option<PanelControl> {
-        None
+        if !self.spec.zoomable.unwrap_or(false) {
+            return None;
+        }
+        match self.spec.zoom_control.as_deref() {
+            Some("none") => None,
+            Some("toolbar") => Some(PanelControl::Toolbar),
+            Some("both") => Some(PanelControl::Both),
+            _ => Some(PanelControl::Menu),
+        }
     }
 }
 
 /// Live `nav-page` view. Reads a RefCell so callback ids stay current
-/// without rebuilding the Kit stack. Paint is the overlay static subset
-/// (plus chat); pages cannot re-enter `RootView`.
+/// without rebuilding the Kit stack. Deferred production rendering runs after
+/// the native page entity has released its render borrow.
 pub struct CljNavPage {
     pub live: Rc<RefCell<Node>>,
     pub path: String,
@@ -2633,11 +3025,32 @@ pub fn settings_pages(node: &Node, cmd_tx: &mpsc::Sender<Cmd>) -> Vec<SettingPag
         .iter()
         .map(|page| {
             let title = page.label_or_id();
-            let mut setting_page = SettingPage::new(title).resettable(false);
+            let mut setting_page = SettingPage::new(title)
+                .resettable(page.resettable.unwrap_or(true))
+                .default_open(page.default_open.unwrap_or(false));
+            if let Some(icon) =
+                mapping::icon_from_parts(page.icon.as_deref(), page.icon_svg.as_deref())
+            {
+                setting_page = setting_page.icon(icon);
+            }
+            if let Some(description) = &page.description {
+                setting_page = setting_page.description(description.clone());
+            }
+            if let Some(style) = &page.title_style {
+                setting_page =
+                    setting_page.header_style(mapping::apply_styled(div(), style).style());
+            }
+            if let Some(suffix) = &page.suffix {
+                let suffix = suffix.clone();
+                setting_page = setting_page.title_suffix(move |_, _| suffix.clone());
+            }
             for group in settings_groups(page) {
                 let mut setting_group = SettingGroup::new();
                 if let Some(label) = group.label.clone() {
                     setting_group = setting_group.title(label);
+                }
+                if let Some(description) = &group.description {
+                    setting_group = setting_group.description(description.clone());
                 }
                 for field in group.items {
                     setting_group = setting_group.item(settings_field(&field, cmd_tx, node));
@@ -2670,70 +3083,153 @@ fn settings_field(field: &Item, cmd_tx: &mpsc::Sender<Cmd>, node: &Node) -> Sett
             );
         }
     };
-    match kind.as_str() {
-        "switch" | "checkbox" => {
-            let checked = field.checked.unwrap_or(false);
-            if kind == "checkbox" {
+    let mut item = if let Some(content) = field.content.clone() {
+        let disabled = field.disabled;
+        let mut item = SettingItem::render(move |_, _, _| {
+            crate::renderer::content_element(protocol::Content::Node(content.clone()), disabled)
+        });
+        if let Some(callback) = field.on_reset.clone() {
+            let tx = cmd_tx.clone();
+            let dirty = field.dirty.unwrap_or(false);
+            item = item.on_reset(
+                move |_| dirty,
+                move |_, _| {
+                    protocol::send_callbacks(
+                        &tx,
+                        vec![protocol::CallbackCall::fire(callback.clone())],
+                    )
+                },
+            );
+        }
+        item
+    } else {
+        match kind.as_str() {
+            "switch" | "checkbox" => {
+                let checked = field.checked.unwrap_or(false);
+                let control = if kind == "checkbox" {
+                    SettingField::checkbox(move |_| checked, move |v, _| emit(json!(v)))
+                } else {
+                    SettingField::switch(move |_| checked, move |v, _| emit(json!(v)))
+                };
                 SettingItem::new(
                     title,
-                    SettingField::checkbox(move |_| checked, move |v, _| emit(json!(v))),
+                    setting_field_options(
+                        control,
+                        field,
+                        field.default_value.as_ref().and_then(Value::as_bool),
+                        cmd_tx,
+                    ),
                 )
-            } else {
+            }
+            "number" => {
+                let n = field.number_value().unwrap_or(0.0) as f64;
+                let options = NumberFieldOptions {
+                    min: field.min.unwrap_or(f32::MIN) as f64,
+                    max: field.max.unwrap_or(f32::MAX) as f64,
+                    step: field.step.unwrap_or(1.0).max(0.000_001) as f64,
+                };
+                let control =
+                    SettingField::number_input(options, move |_| n, move |v, _| emit(json!(v)));
                 SettingItem::new(
                     title,
-                    SettingField::switch(move |_| checked, move |v, _| emit(json!(v))),
+                    setting_field_options(
+                        control,
+                        field,
+                        field.default_value.as_ref().and_then(Value::as_f64),
+                        cmd_tx,
+                    ),
+                )
+            }
+            "dropdown" | "select" => {
+                let selected: SharedString = field.string_value().unwrap_or_default().into();
+                let options: Vec<(SharedString, SharedString)> = field
+                    .items
+                    .iter()
+                    .map(|opt| (opt.id_or_label().into(), opt.label_or_id().into()))
+                    .collect();
+                let control = if field.scrollable.unwrap_or(false) {
+                    SettingField::scrollable_dropdown(
+                        options,
+                        move |_| selected.clone(),
+                        move |v, _| emit(json!(v.to_string())),
+                    )
+                } else {
+                    SettingField::dropdown(
+                        options,
+                        move |_| selected.clone(),
+                        move |v, _| emit(json!(v.to_string())),
+                    )
+                };
+                SettingItem::new(
+                    title,
+                    setting_field_options(control, field, setting_string_default(field), cmd_tx),
+                )
+            }
+            _ => {
+                let text: SharedString = field
+                    .text
+                    .clone()
+                    .or_else(|| field.string_value())
+                    .unwrap_or_default()
+                    .into();
+                let control = SettingField::input(
+                    move |_| text.clone(),
+                    move |v, _| emit(json!(v.to_string())),
+                );
+                SettingItem::new(
+                    title,
+                    setting_field_options(control, field, setting_string_default(field), cmd_tx),
                 )
             }
         }
-        "number" => {
-            let n = field.number_value().unwrap_or(0.0) as f64;
-            let options = NumberFieldOptions {
-                min: field.min.unwrap_or(f32::MIN) as f64,
-                max: field.max.unwrap_or(f32::MAX) as f64,
-                step: field.step.unwrap_or(1.0).max(0.000_001) as f64,
-            };
-            SettingItem::new(
-                title,
-                SettingField::number_input(options, move |_| n, move |v, _| emit(json!(v))),
-            )
-        }
-        "dropdown" | "select" => {
-            let selected: SharedString = field.string_value().unwrap_or_default().into();
-            let options: Vec<(SharedString, SharedString)> = field
-                .items
-                .iter()
-                .map(|opt| {
-                    (
-                        SharedString::from(opt.id_or_label()),
-                        SharedString::from(opt.label_or_id()),
-                    )
-                })
-                .collect();
-            SettingItem::new(
-                title,
-                SettingField::dropdown(
-                    options,
-                    move |_| selected.clone(),
-                    move |v, _| emit(json!(v.to_string())),
-                ),
-            )
-        }
-        _ => {
-            let text: SharedString = field
-                .text
-                .clone()
-                .or_else(|| field.string_value())
-                .unwrap_or_default()
-                .into();
-            SettingItem::new(
-                title,
-                SettingField::input(
-                    move |_| text.clone(),
-                    move |v, _| emit(json!(v.to_string())),
-                ),
-            )
-        }
+    };
+    item = item
+        .disabled(field.disabled)
+        .keywords(field.keywords.clone());
+    if let Some(description) = &field.description {
+        item = item.description(description.clone());
     }
+    if let Some(orientation) = &field.orientation {
+        item = item.layout(if orientation == "vertical" {
+            gpui::Axis::Vertical
+        } else {
+            gpui::Axis::Horizontal
+        });
+    }
+    item
+}
+
+fn setting_string_default(field: &Item) -> Option<SharedString> {
+    field
+        .default_value
+        .as_ref()
+        .and_then(Value::as_str)
+        .map(|s| SharedString::from(s.to_string()))
+}
+
+fn setting_field_options<T>(
+    mut control: SettingField<T>,
+    field: &Item,
+    default: Option<T>,
+    tx: &mpsc::Sender<Cmd>,
+) -> SettingField<T> {
+    if let Some(default) = default {
+        control = control.default_value(default);
+    }
+    if let Some(style) = &field.style {
+        control = mapping::apply_styled(control, style);
+    }
+    if let Some(callback) = field.on_reset.clone() {
+        let tx = tx.clone();
+        let dirty = field.dirty.unwrap_or(false);
+        control = control.on_reset(
+            move |_| dirty,
+            move |_, _| {
+                protocol::send_callbacks(&tx, vec![protocol::CallbackCall::fire(callback.clone())])
+            },
+        );
+    }
+    control
 }
 
 fn infer_settings_kind(field: &Item) -> String {
@@ -2759,6 +3255,18 @@ pub fn build_settings(node: &Node, key: &str, cmd_tx: &mpsc::Sender<Cmd>) -> Set
     }
     if let Some(name) = node.group_variant.as_deref().filter(|s| !s.is_empty()) {
         settings = settings.with_group_variant(mapping::parse_group_variant(Some(name)));
+    }
+    if let Some(style) = &node.sidebar_style {
+        settings = settings.sidebar_style(mapping::apply_styled(div(), style).style());
+    }
+    if let Some(style) = &node.header_style {
+        settings = settings.header_style(mapping::apply_styled(div(), style).style());
+    }
+    if let Some(index) = node.default_selected_index {
+        settings = settings.default_selected_index(gpui_component::setting::SelectIndex {
+            page_ix: index,
+            group_ix: None,
+        });
     }
     settings
 }

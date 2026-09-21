@@ -631,7 +631,8 @@ pub fn featured_colors(node: &Node) -> Option<Vec<Hsla>> {
 
 /// Kit `DialogButtonProps` (ok/cancel text and named variants).
 pub fn dialog_button_props(node: &Node, show_cancel: bool) -> DialogButtonProps {
-    let mut props = DialogButtonProps::default().show_cancel(show_cancel);
+    let mut props =
+        DialogButtonProps::default().show_cancel(node.show_cancel.unwrap_or(show_cancel));
     if let Some(text) = node.ok_text.as_deref().filter(|s| !s.is_empty()) {
         props = props.ok_text(text.to_string());
     }
@@ -796,7 +797,7 @@ pub fn apply_button_chrome(mut button: Button, node: &Node, cx: Option<&App>) ->
     if let Some(icon) = node.loading_icon.as_deref().and_then(parse_icon) {
         button = button.loading_icon(icon);
     }
-    if let Some(tooltip) = node.tooltip.as_deref().filter(|s| !s.is_empty()) {
+    if let Some(tooltip) = kit_tooltip(node) {
         button = button.tooltip(tooltip.to_string());
     }
     if let Some(placement) = parse_optional_placement(node.tooltip_placement.as_deref()) {
@@ -842,7 +843,10 @@ pub fn apply_jump_button_renderer(button: Button, node: &Node, cx: Option<&App>)
     }
 }
 
-fn kit_tooltip(node: &Node) -> Option<String> {
+pub(crate) fn kit_tooltip(node: &Node) -> Option<String> {
+    if node.tooltip_content.is_some() || node.tooltip_key.is_some() {
+        return None;
+    }
     node.tooltip
         .as_deref()
         .filter(|s| !s.is_empty())
@@ -1432,7 +1436,7 @@ pub fn parse_content_type(value: Option<&str>) -> Option<InputContentType> {
 }
 
 /// Prefix / suffix as a string `Label`, or an icon when text is omitted.
-/// Nested widgets are not wrapped (Kit `IntoElement`).
+/// Legacy string/icon helper; rich affixes use Content::into_element.
 pub fn affix_element(text: Option<&str>, icon: Option<&str>) -> Option<AnyElement> {
     if let Some(text) = text.map(str::trim).filter(|s| !s.is_empty()) {
         Some(Label::new(text.to_string()).into_any_element())
@@ -1509,16 +1513,86 @@ pub fn apply_input_chrome(input: Input, node: &Node) -> Input {
     if let Some(id) = node.id.as_deref().filter(|s| !s.is_empty()) {
         input = input.accessibility_id(id.to_string());
     }
-    if let Some(prefix) = affix_element(node.prefix.as_deref(), node.icon.as_deref()) {
+    if let Some(prefix) = node
+        .prefix
+        .clone()
+        .map(IntoElement::into_any_element)
+        .or_else(|| affix_element(None, node.icon.as_deref()))
+    {
         input = input.prefix(prefix);
     }
-    if let Some(suffix) = affix_element(node.suffix.as_deref(), None) {
+    if let Some(suffix) = node
+        .suffix
+        .clone()
+        .map(IntoElement::into_any_element)
+        .or_else(|| affix_element(None, None))
+    {
         input = input.suffix(suffix);
+    }
+    if let Some(index) = node.tab_index.filter(|n| n.is_finite()) {
+        input = input.tab_index(index as isize);
+    }
+    if let Some(role) = parse_button_role(node.role.as_deref()) {
+        input = input.role(role);
+    }
+    if !node.context_menu.is_empty() {
+        let items = node.context_menu.clone();
+        let key = node
+            .id
+            .clone()
+            .or_else(|| node.source_path.clone())
+            .unwrap_or_else(|| "input-menu".into());
+        input =
+            input.context_menu(move |_, _, _| crate::action_bridge::fill_native_menu(&items, &key));
+    }
+    if node.on_paste.is_some() || node.paste_policy.is_some() {
+        input = input.on_paste(paste_handler(node));
     }
     input
 }
 
-/// Kit `Textarea` chrome. Not `context_menu` (arbitrary native-menu builder).
+pub fn clipboard_payload(item: &gpui::ClipboardItem) -> serde_json::Value {
+    use base64::Engine as _;
+    let entries = item.entries.iter().map(|entry| match entry {
+        gpui::ClipboardEntry::String(text) => serde_json::json!({"type":"text", "text":text.text, "metadata":text.metadata}),
+        gpui::ClipboardEntry::Image(image) => serde_json::json!({"type":"image", "mime-type":image.format.mime_type(), "data":base64::engine::general_purpose::STANDARD.encode(&image.bytes)}),
+        gpui::ClipboardEntry::ExternalPaths(paths) => serde_json::json!({"type":"files", "paths":paths.0.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>()}),
+    }).collect::<Vec<_>>();
+    serde_json::json!({"text":item.text(), "entries":entries})
+}
+fn paste_handler(
+    node: &Node,
+) -> impl Fn(&gpui::ClipboardItem, &mut gpui::Window, &mut App) -> bool + 'static {
+    let key = node
+        .id
+        .clone()
+        .or_else(|| node.source_path.clone())
+        .unwrap_or_default();
+    let policy = node.paste_policy.clone();
+    let notify = node.on_paste.is_some();
+    move |item, window, cx| {
+        if notify {
+            crate::renderer::window_action_emitter(window, cx)(
+                crate::overlay::QueuedAction::WidgetValue {
+                    key: key.clone(),
+                    event: "paste".into(),
+                    value: clipboard_payload(item),
+                },
+                cx,
+            );
+        }
+        match policy.as_deref() {
+            Some("consume") => true,
+            Some("consume-non-text") => item
+                .entries
+                .iter()
+                .any(|e| !matches!(e, gpui::ClipboardEntry::String(_))),
+            _ => false,
+        }
+    }
+}
+
+/// Kit Textarea chrome, native menu recipes and clipboard policy.
 pub fn apply_textarea_chrome(mut input: Textarea, node: &Node) -> Textarea {
     if let Some(appearance) = node.appearance {
         input = input.appearance(appearance);
@@ -1539,10 +1613,29 @@ pub fn apply_textarea_chrome(mut input: Textarea, node: &Node) -> Textarea {
     {
         input = input.aria_label(label.to_string());
     }
+    if let Some(index) = node.tab_index.filter(|n| n.is_finite()) {
+        input = input.tab_index(index as isize);
+    }
+    if let Some(role) = parse_button_role(node.role.as_deref()) {
+        input = input.role(role);
+    }
+    if !node.context_menu.is_empty() {
+        let items = node.context_menu.clone();
+        let key = node
+            .id
+            .clone()
+            .or_else(|| node.source_path.clone())
+            .unwrap_or_else(|| "input-menu".into());
+        input =
+            input.context_menu(move |_, _, _| crate::action_bridge::fill_native_menu(&items, &key));
+    }
+    if node.on_paste.is_some() || node.paste_policy.is_some() {
+        input = input.on_paste(paste_handler(node));
+    }
     input
 }
 
-/// Kit `Editor` chrome. Not LSP, not `context_menu`.
+/// Kit `Editor` chrome, native menu and paste handling. Providers live on its retained state.
 pub fn apply_editor_chrome(mut editor: Editor, node: &Node) -> Editor {
     if let Some(appearance) = node.appearance {
         editor = editor.appearance(appearance);
@@ -1563,6 +1656,25 @@ pub fn apply_editor_chrome(mut editor: Editor, node: &Node) -> Editor {
     {
         editor = editor.aria_label(label.to_string());
     }
+    if let Some(index) = node.tab_index.filter(|n| n.is_finite()) {
+        editor = editor.tab_index(index as isize);
+    }
+    if let Some(role) = parse_button_role(node.role.as_deref()) {
+        editor = editor.role(role);
+    }
+    if !node.context_menu.is_empty() {
+        let items = node.context_menu.clone();
+        let key = node
+            .id
+            .clone()
+            .or_else(|| node.source_path.clone())
+            .unwrap_or_else(|| "input-menu".into());
+        editor = editor
+            .context_menu(move |_, _, _| crate::action_bridge::fill_native_menu(&items, &key));
+    }
+    if node.on_paste.is_some() || node.paste_policy.is_some() {
+        editor = editor.on_paste(paste_handler(node));
+    }
     editor
 }
 
@@ -1577,10 +1689,20 @@ pub fn apply_number_input_chrome(mut input: NumberInput, node: &Node) -> NumberI
     if let Some(focus) = node.focus_ring {
         input = input.focus_ring(focus);
     }
-    if let Some(prefix) = affix_element(node.prefix.as_deref(), node.icon.as_deref()) {
+    if let Some(prefix) = node
+        .prefix
+        .clone()
+        .map(IntoElement::into_any_element)
+        .or_else(|| affix_element(None, node.icon.as_deref()))
+    {
         input = input.prefix(prefix);
     }
-    if let Some(suffix) = affix_element(node.suffix.as_deref(), None) {
+    if let Some(suffix) = node
+        .suffix
+        .clone()
+        .map(IntoElement::into_any_element)
+        .or_else(|| affix_element(None, None))
+    {
         input = input.suffix(suffix);
     }
     input

@@ -70,6 +70,9 @@ impl RegistryPeer {
 
     fn request(&mut self, request: &Value) -> Value {
         match request["op"].as_str().unwrap() {
+            "provider" => {
+                json!({"ok":true,"value": {"method":request["provider-id"],"text":request["params"]["text"]}})
+            }
             "render" => json!({"ok": true, "tree": self.export_tree()}),
             "callback" => {
                 let id = request["callback-id"].as_str().unwrap();
@@ -707,4 +710,27 @@ fn nav_page_stale_callback_fails_closed_after_registry_replacement() {
     let peer = fixture.peer.lock().unwrap();
     assert_eq!(peer.unknown, vec![old_id]);
     assert!(!peer.fired.iter().any(|(role, _, _)| role == "nav-go"));
+}
+
+#[test]
+fn provider_rpc_round_trip_does_not_render_or_replace_callbacks() {
+    let fixture = Fixture::new();
+    fixture.initial_tree();
+    let (response, receiver) = async_channel::bounded(1);
+    fixture
+        .host
+        .cmd_tx
+        .send(Cmd::Provider {
+            id: "completion".into(),
+            params: json!({"text":"hel"}),
+            response,
+        })
+        .unwrap();
+    assert_eq!(
+        receiver.recv_blocking().unwrap().unwrap(),
+        json!({"method":"completion","text":"hel"})
+    );
+    assert_eq!(fixture.peer.lock().unwrap().generation, 1);
+    fixture.initial_tree();
+    assert_eq!(fixture.peer.lock().unwrap().generation, 2);
 }

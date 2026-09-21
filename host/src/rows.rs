@@ -2,10 +2,11 @@
 //! a table cell is a string or a supported RenderOnce node. Rust owns
 //! virtualization, search, and selection. Callbacks send wire ids.
 
+use crate::mapping;
 use crate::protocol::{Cmd, Item, TableCell};
 use gpui::{
-    App, Context, IntoElement, ParentElement, SharedString, Styled, Task, TextAlign, Window, div,
-    px,
+    AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
+    Task, TextAlign, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, IndexPath, h_flex,
@@ -32,7 +33,9 @@ pub struct Row {
 impl Row {
     pub fn from_item(item: &Item) -> Self {
         let label = item.label_or_id();
-        let cells = if item.cells.is_empty() {
+        let cells = if let Some(content) = &item.content {
+            vec![TableCell::Node(content.clone())]
+        } else if item.cells.is_empty() {
             vec![TableCell::text(label.clone())]
         } else {
             item.cells.clone()
@@ -65,6 +68,18 @@ fn hash_items(items: &[Item], hasher: &mut DefaultHasher) {
         item.label.hash(hasher);
         item.disabled.hash(hasher);
         item.cells.hash(hasher);
+        item.content
+            .as_ref()
+            .map(|node| TableCell::Node(node.clone()))
+            .hash(hasher);
+        item.header
+            .as_ref()
+            .map(|node| TableCell::Node(node.clone()))
+            .hash(hasher);
+        item.footer
+            .as_ref()
+            .map(|node| TableCell::Node(node.clone()))
+            .hash(hasher);
         item.width.map(f32::to_bits).hash(hasher);
         item.span.hash(hasher);
         item.align.hash(hasher);
@@ -717,28 +732,94 @@ pub fn tree_items_from_protocol(items: &[Item]) -> Vec<TreeItem> {
         .collect()
 }
 
+pub fn list_rows_from_items(items: &[Item]) -> Vec<Row> {
+    items
+        .iter()
+        .flat_map(|item| {
+            if item.items.is_empty() {
+                vec![Row::from_item(item)]
+            } else {
+                item.items.iter().map(Row::from_item).collect()
+            }
+        })
+        .collect()
+}
+
 pub struct RowListDelegate {
+    render_spec: crate::protocol::Node,
+    sections: Vec<std::ops::Range<usize>>,
+    section_headers: Vec<Option<crate::protocol::Content>>,
+    section_footers: Vec<Option<crate::protocol::Content>>,
+    section_visible: Vec<Vec<usize>>,
     pub items: Vec<Row>,
     pub visible: Vec<usize>,
     pub selected: Option<IndexPath>,
     query: String,
+    pub suppress_query: bool,
     loading: bool,
     has_more: bool,
     load_more_threshold: usize,
-    empty: Option<String>,
+    empty: Option<crate::protocol::Content>,
     on_load_more: Option<String>,
     load_more_sent: bool,
     cmd_tx: Option<std::sync::mpsc::Sender<Cmd>>,
 }
 
 impl RowListDelegate {
+    pub fn sync_rendering(&mut self, node: &crate::protocol::Node) {
+        self.render_spec = node.clone();
+        self.sections.clear();
+        self.section_headers.clear();
+        self.section_footers.clear();
+        let mut start = 0;
+        let mut flat_start = 0;
+        for item in node.collection() {
+            if item.items.is_empty() {
+                start += 1;
+                continue;
+            }
+            if flat_start < start {
+                self.sections.push(flat_start..start);
+                self.section_headers.push(None);
+                self.section_footers.push(None);
+            }
+            let end = start + item.items.len();
+            self.sections.push(start..end);
+            self.section_headers.push(Some(
+                item.header
+                    .clone()
+                    .map(crate::protocol::Content::Node)
+                    .unwrap_or_else(|| item.label_or_id().into()),
+            ));
+            self.section_footers
+                .push(item.footer.clone().map(crate::protocol::Content::Node));
+            start = end;
+            flat_start = end;
+        }
+        if flat_start < start || self.sections.is_empty() {
+            self.sections.push(flat_start..start);
+            self.section_headers
+                .push(node.header.clone().map(crate::protocol::Content::Node));
+            self.section_footers
+                .push(node.footer.clone().map(crate::protocol::Content::Node));
+        }
+        self.apply_query();
+    }
+
     pub fn new(items: Vec<Row>) -> Self {
         let visible: Vec<usize> = (0..items.len()).collect();
+        let count = items.len();
         Self {
+            render_spec: crate::protocol::Node::default(),
+            sections: std::iter::once(0..count).collect(),
+            section_headers: vec![None],
+            section_footers: vec![None],
+            section_visible: vec![(0..count).collect()],
             items,
             visible,
             selected: None,
             query: String::new(),
+            suppress_query: false,
             loading: false,
             has_more: false,
             load_more_threshold: 20,
@@ -759,7 +840,7 @@ impl RowListDelegate {
         loading: bool,
         has_more: bool,
         load_more_threshold: usize,
-        empty: Option<String>,
+        empty: Option<crate::protocol::Content>,
         on_load_more: Option<String>,
         collection_changed: bool,
     ) {
@@ -802,6 +883,9 @@ impl RowListDelegate {
     }
 
     pub fn set_items(&mut self, items: Vec<Row>) {
+        if self.sections.len() == 1 {
+            self.sections[0] = 0..items.len();
+        }
         self.items = items;
         self.apply_query();
     }
@@ -816,7 +900,7 @@ impl RowListDelegate {
     }
 
     fn apply_query(&mut self) {
-        if self.query.is_empty() {
+        if self.query.is_empty() || self.render_spec.filterable == Some(false) {
             self.visible = (0..self.items.len()).collect();
         } else {
             let needle = self.query.to_lowercase();
@@ -828,20 +912,34 @@ impl RowListDelegate {
                 .map(|(ix, _)| ix)
                 .collect();
         }
-    }
-
-    pub fn id_at(&self, ix: IndexPath) -> Option<String> {
-        self.visible
-            .get(ix.row)
-            .and_then(|&row| self.items.get(row))
-            .map(|row| row.id.clone())
-    }
-
-    pub fn index_of(&self, id: &str) -> Option<IndexPath> {
-        self.visible
+        self.section_visible = self
+            .sections
             .iter()
-            .position(|&row| self.items.get(row).is_some_and(|item| item.id == id))
-            .map(IndexPath::new)
+            .map(|range| {
+                self.visible
+                    .iter()
+                    .copied()
+                    .filter(|i| range.contains(i))
+                    .collect()
+            })
+            .collect();
+    }
+
+    fn row_at(&self, ix: IndexPath) -> Option<usize> {
+        self.section_visible.get(ix.section)?.get(ix.row).copied()
+    }
+    pub fn id_at(&self, ix: IndexPath) -> Option<String> {
+        self.items.get(self.row_at(ix)?).map(|row| row.id.clone())
+    }
+    pub fn index_of(&self, id: &str) -> Option<IndexPath> {
+        self.section_visible
+            .iter()
+            .enumerate()
+            .find_map(|(section, rows)| {
+                rows.iter()
+                    .position(|&row| self.items.get(row).is_some_and(|item| item.id == id))
+                    .map(|row| IndexPath::default().section(section).row(row))
+            })
     }
 }
 
@@ -851,16 +949,72 @@ impl ListDelegate for RowListDelegate {
     fn perform_search(
         &mut self,
         query: &str,
-        _: &mut Window,
-        _: &mut Context<ListState<Self>>,
+        window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
     ) -> Task<()> {
+        let changed = self.query != query;
         self.query = query.to_string();
         self.apply_query();
+        if changed && !self.suppress_query && self.render_spec.on_query.is_some() {
+            let emit = crate::renderer::window_action_emitter(window, cx);
+            let key = crate::overlay::node_key(
+                &self.render_spec,
+                self.render_spec.source_path.as_deref().unwrap_or("list"),
+            );
+            let action = crate::overlay::QueuedAction::WidgetValue {
+                key,
+                event: "query".into(),
+                value: serde_json::json!(query),
+            };
+            cx.defer(move |cx| emit(action, cx));
+        }
         Task::ready(())
     }
 
-    fn items_count(&self, _: usize, _: &App) -> usize {
-        self.visible.len()
+    fn render_initial(
+        &mut self,
+        _: &mut Window,
+        _: &mut Context<ListState<Self>>,
+    ) -> Option<AnyElement> {
+        self.render_spec
+            .initial_content
+            .clone()
+            .map(|node| crate::protocol::Content::Node(node).into_any_element())
+    }
+
+    fn render_loading(
+        &mut self,
+        _: &mut Window,
+        _: &mut Context<ListState<Self>>,
+    ) -> impl IntoElement {
+        self.render_spec
+            .loading_content
+            .clone()
+            .map(|node| crate::protocol::Content::Node(node).into_any_element())
+            .unwrap_or_else(|| {
+                // Kit keeps Loading private; compose the same three native skeleton rows.
+                use gpui_component::{skeleton::Skeleton, v_flex};
+                v_flex()
+                    .py_2p5()
+                    .gap_3()
+                    .children((0..3).map(|i| {
+                        ListItem::new(("loading", i as usize)).disabled(true).child(
+                            v_flex()
+                                .gap_1p5()
+                                .overflow_hidden()
+                                .child(Skeleton::new().h_5().w_48().max_w_full())
+                                .child(Skeleton::new().secondary().h_3().w_64().max_w_full()),
+                        )
+                    }))
+                    .into_any_element()
+            })
+    }
+
+    fn sections_count(&self, _: &App) -> usize {
+        self.sections.len()
+    }
+    fn items_count(&self, section: usize, _: &App) -> usize {
+        self.section_visible.get(section).map_or(0, Vec::len)
     }
 
     fn render_item(
@@ -869,15 +1023,39 @@ impl ListDelegate for RowListDelegate {
         _: &mut Window,
         _: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
-        let row = self
-            .visible
-            .get(ix.row)
-            .and_then(|&row| self.items.get(row))?;
-        let mut item = ListItem::new(ix).child(SharedString::from(row.label.clone()));
+        let source_ix = self.row_at(ix)?;
+        let row = self.items.get(source_ix)?;
+        let mut item = ListItem::new(ix);
+        item = if let Some(TableCell::Node(content)) = row.cells.first() {
+            item.child(crate::protocol::Content::Node(content.clone()).at(format!(
+                "{}-item-{}",
+                self.render_spec.id.as_deref().unwrap_or("list"),
+                source_ix
+            )))
+        } else {
+            item.child(SharedString::from(row.label.clone()))
+        };
         if row.disabled {
             item = item.disabled(true);
         }
         Some(item)
+    }
+
+    fn render_section_header(
+        &mut self,
+        section: usize,
+        _: &mut Window,
+        _: &mut Context<ListState<Self>>,
+    ) -> Option<impl IntoElement> {
+        self.section_headers.get(section).cloned().flatten()
+    }
+    fn render_section_footer(
+        &mut self,
+        section: usize,
+        _: &mut Window,
+        _: &mut Context<ListState<Self>>,
+    ) -> Option<impl IntoElement> {
+        self.section_footers.get(section).cloned().flatten()
     }
 
     fn set_selected_index(
@@ -898,8 +1076,8 @@ impl ListDelegate for RowListDelegate {
             .size_full()
             .justify_center()
             .text_color(cx.theme().muted_foreground.opacity(0.6));
-        if let Some(text) = self.empty.as_deref().filter(|s| !s.is_empty()) {
-            el.child(text.to_string()).into_any_element()
+        if let Some(text) = self.empty.as_ref().filter(|s| !s.is_empty()) {
+            el.child(text.clone()).into_any_element()
         } else {
             el.child(Icon::new(IconName::Inbox).size_12())
                 .into_any_element()
@@ -930,6 +1108,7 @@ impl ListDelegate for RowListDelegate {
 }
 
 pub struct RowTableDelegate {
+    render_spec: crate::protocol::Node,
     pub columns: Vec<Column>,
     pub rows: Vec<Row>,
     pub header_groups: Vec<Vec<ColumnGroup>>,
@@ -941,7 +1120,7 @@ pub struct RowTableDelegate {
     loading: bool,
     has_more: bool,
     load_more_threshold: usize,
-    empty: Option<String>,
+    empty: Option<crate::protocol::Content>,
     on_load_more: Option<String>,
     on_sort: Option<String>,
     load_more_sent: bool,
@@ -960,7 +1139,7 @@ pub struct TableChrome {
     loading: bool,
     has_more: bool,
     load_more_threshold: usize,
-    empty: Option<String>,
+    empty: Option<crate::protocol::Content>,
     on_load_more: Option<String>,
     on_sort: Option<String>,
 }
@@ -970,7 +1149,7 @@ impl TableChrome {
         loading: bool,
         has_more: bool,
         load_more_threshold: usize,
-        empty: Option<String>,
+        empty: Option<crate::protocol::Content>,
         on_load_more: Option<String>,
         on_sort: Option<String>,
     ) -> Self {
@@ -986,9 +1165,14 @@ impl TableChrome {
 }
 
 impl RowTableDelegate {
+    pub fn sync_rendering(&mut self, node: &crate::protocol::Node) {
+        self.render_spec = node.clone();
+    }
+
     pub fn new(columns: Vec<Column>, rows: Vec<Row>) -> Self {
         let source_order: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
         let mut this = Self {
+            render_spec: crate::protocol::Node::default(),
             columns,
             rows,
             header_groups: Vec::new(),
@@ -1210,6 +1394,117 @@ fn paint_td(inner: impl IntoElement) -> gpui::AnyElement {
 }
 
 impl TableDelegate for RowTableDelegate {
+    fn render_header(
+        &mut self,
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let el = div().id("header");
+        if let Some(style) = &self.render_spec.header_style {
+            mapping::apply_styled(el, style)
+        } else {
+            el
+        }
+    }
+    fn render_tr(
+        &mut self,
+        row: usize,
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let mut el = div().id(("row", row));
+        if let Some(style) = &self.render_spec.row_style {
+            el = mapping::apply_styled(el, style);
+        }
+        if let Some(id) = self.rows.get(row).map(|r| r.id.as_str())
+            && let Some(style) = self
+                .render_spec
+                .items
+                .iter()
+                .find(|i| i.id_or_label() == id)
+                .and_then(|i| i.style.as_deref())
+        {
+            el = mapping::apply_styled(el, style);
+        }
+        el
+    }
+    fn render_group_th(
+        &mut self,
+        label: &SharedString,
+        _: usize,
+        width: gpui::Pixels,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let content = self
+            .render_spec
+            .header_groups
+            .iter()
+            .flatten()
+            .find(|i| i.label_or_id() == label.as_str())
+            .and_then(|i| i.content.clone());
+        let el = div()
+            .w(width)
+            .h_full()
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .border_r_1()
+            .border_color(cx.theme().border);
+        if let Some(content) = content {
+            el.child(crate::protocol::Content::Node(content))
+                .into_any_element()
+        } else {
+            el.child(label.clone()).into_any_element()
+        }
+    }
+    fn render_last_empty_col(
+        &mut self,
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        if let Some(content) = &self.render_spec.last_column_content {
+            crate::protocol::Content::Node(content.clone()).into_any_element()
+        } else {
+            h_flex().w_3().h_full().flex_shrink_0().into_any_element()
+        }
+    }
+    fn visible_rows_changed(
+        &mut self,
+        range: std::ops::Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        if self.render_spec.on_visible_rows.is_some() {
+            crate::renderer::window_action_emitter(window, cx)(
+                crate::overlay::QueuedAction::WidgetValue {
+                    key: self.path.clone(),
+                    event: "visible-rows".into(),
+                    value: serde_json::json!({"start":range.start,"end":range.end}),
+                },
+                cx,
+            );
+        }
+    }
+    fn visible_columns_changed(
+        &mut self,
+        range: std::ops::Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        if self.render_spec.on_visible_columns.is_some() {
+            crate::renderer::window_action_emitter(window, cx)(
+                crate::overlay::QueuedAction::WidgetValue {
+                    key: self.path.clone(),
+                    event: "visible-columns".into(),
+                    value: serde_json::json!({"start":range.start,"end":range.end}),
+                },
+                cx,
+            );
+        }
+    }
+
     fn columns_count(&self, _: &App) -> usize {
         self.columns.len()
     }
@@ -1227,6 +1522,47 @@ impl TableDelegate for RowTableDelegate {
             None
         } else {
             Some(self.header_groups.clone())
+        }
+    }
+
+    fn context_menu(
+        &mut self,
+        _: usize,
+        menu: gpui_component::menu::PopupMenu,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> gpui_component::menu::PopupMenu {
+        let emit = crate::renderer::window_action_emitter(window, cx);
+        crate::overlay::fill_popup_menu(
+            crate::overlay::configure_popup_menu(menu, &self.render_spec),
+            &self.render_spec.context_menu,
+            &self.path,
+            &[],
+            emit,
+            window,
+            cx,
+        )
+    }
+
+    fn render_th(
+        &mut self,
+        col_ix: usize,
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let column = &self.columns[col_ix];
+        let content = self
+            .render_spec
+            .options
+            .iter()
+            .find(|item| item.id_or_label() == column.key.as_ref())
+            .and_then(|item| item.content.clone());
+        match content {
+            Some(content) => crate::protocol::Content::Node(content).into_any_element(),
+            None => div()
+                .size_full()
+                .child(column.name.clone())
+                .into_any_element(),
         }
     }
 
@@ -1347,8 +1683,8 @@ impl TableDelegate for RowTableDelegate {
             .size_full()
             .justify_center()
             .text_color(cx.theme().muted_foreground.opacity(0.6));
-        if let Some(text) = self.empty.as_deref().filter(|s| !s.is_empty()) {
-            el.child(text.to_string()).into_any_element()
+        if let Some(text) = self.empty.as_ref().filter(|s| !s.is_empty()) {
+            el.child(text.clone()).into_any_element()
         } else {
             el.child(Icon::new(IconName::Inbox).size_12())
                 .into_any_element()
@@ -2135,6 +2471,46 @@ mod tests {
             Ok(Cmd::Callback { id, .. }) => assert_eq!(id, "cb-1"),
             other => panic!("expected table load-more after callback appeared, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn grouped_lists_keep_section_paths_when_search_filters_rows() {
+        let node: crate::protocol::Node = serde_json::from_value(json!({"type":"list", "items":[
+            {"id":"loose", "label":"Loose"},
+            {"id":"languages", "header":{"type":"label","text":"Languages"}, "items":[
+                {"id":"rust","label":"Rust"}, {"id":"clojure","label":"Clojure"}]},
+            {"id":"tools", "items":[{"id":"clock","label":"Clock"}]}
+        ]}))
+        .unwrap();
+        let mut delegate = RowListDelegate::new(list_rows_from_items(&node.items));
+        delegate.sync_rendering(&node);
+        assert_eq!(
+            delegate.id_at(IndexPath::new(1).section(1)).as_deref(),
+            Some("clojure")
+        );
+        delegate.query = "clo".into();
+        delegate.apply_query();
+        assert_eq!(
+            delegate
+                .section_visible
+                .iter()
+                .map(Vec::len)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 1]
+        );
+        assert_eq!(
+            delegate.index_of("clojure"),
+            Some(IndexPath::new(0).section(1))
+        );
+        assert_eq!(
+            delegate.index_of("clock"),
+            Some(IndexPath::new(0).section(2))
+        );
+        assert_eq!(
+            delegate.id_at(IndexPath::new(0).section(2)).as_deref(),
+            Some("clock")
+        );
+        assert!(delegate.index_of("rust").is_none());
     }
 
     #[test]

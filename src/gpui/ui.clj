@@ -10,7 +10,7 @@
   become false. Nullable overrides (such as :focus-ring) keep nil,
   and omitted keys keep their defaults. Other values are type errors;
   use boolean or a predicate for non-boolean truthy state."
-  (:refer-clojure :exclude [list]))
+  (:refer-clojure :exclude [list empty]))
 
 (def protocol-version
   "Version of the Clojure↔host UI-tree protocol. Bump when the schema changes."
@@ -443,7 +443,33 @@
         (contains? x :disabled) (assoc :disabled (boolean-state (:disabled x)))
         (contains? x :separator) (assoc :separator (boolean-state (:separator x)))
         (contains? x :expanded) (assoc :expanded (boolean-state (:expanded x)))
-        (some? (:display x)) (assoc :display (str (:display x)))
+        (and (some? (:display x)) (not (ui-node? (:display x)))) (assoc :display (str (:display x)))
+        (ui-node? (:display x)) (assoc :display-content (:display x))
+        (seq (:children x)) (assoc :children (flatten-children (:children x)))
+        (map? (:title-style x)) (assoc :title-style (:title-style x))
+        (map? (:content-style x)) (assoc :content-style (:content-style x))
+        (map? (:hover-style x)) (assoc :hover-style (:hover-style x))
+        (contains? x :default-open) (assoc :default-open (:default-open x))
+        (contains? x :click-to-open) (assoc :click-to-open (:click-to-open x))
+        (contains? x :click-to-toggle) (assoc :click-to-toggle (:click-to-toggle x))
+        (contains? x :href) (assoc :href (:href x))
+        (contains? x :description) (assoc :description (:description x))
+        (contains? x :resettable) (assoc :resettable (:resettable x))
+        (contains? x :dirty) (assoc :dirty (:dirty x))
+        (contains? x :scrollable) (assoc :scrollable (:scrollable x))
+        (contains? x :orientation) (assoc :orientation (:orientation x))
+        (contains? x :default-value) (assoc :default-value (:default-value x))
+        (fn? (:on-reset x)) (assoc :on-reset (:on-reset x))
+        (contains? x :title-bar) (assoc :title-bar (:title-bar x))
+        (contains? x :inner-padding) (assoc :inner-padding (:inner-padding x))
+        (contains? x :closable) (assoc :closable (:closable x))
+        (contains? x :zoomable) (assoc :zoomable (:zoomable x))
+        (contains? x :visible) (assoc :visible (:visible x))
+        (contains? x :tab-name) (assoc :tab-name (:tab-name x))
+        (contains? x :zoom-control) (assoc :zoom-control (:zoom-control x))
+        (contains? x :suffix) (assoc :suffix (:suffix x))
+        (ui-node? (:header x)) (assoc :header (:header x))
+        (ui-node? (:footer x)) (assoc :footer (:footer x))
         (fn? (:on-click x)) (assoc :on-click (:on-click x))
         (ui-node? content) (assoc :content content)
         (and (some? content) (not (ui-node? content)))
@@ -472,6 +498,9 @@
         (some? (:low x)) (assoc :low (:low x))
         (some? (:close x)) (assoc :close (:close x))
         (some? (:source x)) (assoc :source (wire-id (:source x)))
+        (some? (:source-range x)) (assoc :source-range (vec (:source-range x)))
+        (some? (:source-pattern x)) (assoc :source-pattern (str (:source-pattern x)))
+        (some? (:baseline x)) (assoc :baseline (:baseline x))
         (some? (:target x)) (assoc :target (wire-id (:target x)))
         (some? (:icon x)) (assoc :icon (wire-id (:icon x)))
         (some? (:icon-svg x)) (assoc :icon-svg (str (:icon-svg x)))
@@ -844,11 +873,10 @@
   `:scroll-generation` reapplies that target after manual scrolling.
   Changing the row identities resets the list; paint-only updates keep it.
 
-  Rows support stacks, labels, compound buttons, and other static widgets.
-  Stacks and labels support `:on-click`, including clicks on stack padding.
-  Give clickable nodes and `ui/input` fields stable ids. Inputs retain their
-  native state offscreen; clicks use the current callback registry. Other stateful
-  widgets (list, data-table, editor) are not supported inside rows."
+  Rows accept ordinary widgets, including inputs, editors, lists and tables.
+  Initialized controls retain their native state offscreen until their nodes
+  leave the tree. Stacks and labels support `:on-click`, including clicks on
+  padding. Give clickable nodes and stateful controls stable ids."
   [& args]
   (let [[style children] (split-style-children args)]
     (assoc style :type :virtual-scroll :children (flatten-children children))))
@@ -866,10 +894,11 @@
   (InputState bullets; applied when the Clojure value changes or when
   `:mask-toggle` is removed), `:mask-toggle` (show/hide button),
   `:content-type` (`:password`, `:email`, … — autofill hint, not
-  masking), `:prefix` / `:suffix` strings, `:icon` as the prefix when
+  masking), `:prefix` / `:suffix` strings or widgets, `:icon` as the prefix when
   `:prefix` is omitted, named `:size` (`Input::with_size`),
-  `:accessibility-label`. Custom prefix/suffix widgets and
-  `context_menu` builders are not wrapped.
+  `:accessibility-label`, `:role`, and `:tab-index`. `:context-menu`
+  accepts native menu item maps. `:on-paste` receives text and typed clipboard
+  entries; `:paste-policy` is `:consume` or `:consume-non-text` to intercept.
 
   (ui/input draft
             {:id \"new-todo\"
@@ -907,10 +936,13 @@
   "Multi-line text input (`Textarea` / `TextareaState`).
 
   Same string callbacks as `input`. `:rows` is the visible height
-  (default 3). Prefer a stable `:id`. When `:on-submit` is set, Enter
+  (default 3); `:auto-grow [min-rows max-rows]` grows with content.
+  `:soft-wrap`, `:wrapping-indent`, `:show-whitespaces`, `:tab-size`,
+  `:hard-tabs` and `:selected-range` configure the native text engine.
+  Prefer a stable `:id`. When `:on-submit` is set, Enter
   submits and Shift+Enter inserts a newline. Kit chrome: `:appearance`,
   `:bordered` (omit = Kit true), `:readonly`, `:accessibility-label`.
-  Custom `context_menu` builders are not wrapped.
+  `:context-menu` accepts native menu item maps.
 
   (ui/textarea notes {:id \"notes\" :rows 6 :on-change set!})
   (ui/textarea notes {:id \"notes\" :readonly true})"
@@ -933,8 +965,7 @@
 
   `:tooltip` is Kit `Switch::tooltip` (not the generic wrapper).
   `:accessibility-label` is Kit a11y (replaces the announced name
-  without changing the visible label). Checked-track `.color()` is
-  not wrapped (it would collide with host text `:color`).
+  without changing the visible label). `:checked-color` sets the native checked-track color.
 
   (ui/switch on? {:on-change #(swap! !state assoc :on %)})
   (ui/switch on? on-change \"Notifications\")"
@@ -1295,8 +1326,7 @@
 
   Nested `:items` are Kit `SelectGroup` sections (`IndexPath` section+row
   on the host). A group is `{ :label \"Lisp\" :items [{:id :clj :label \"Clojure\"}] }`.
-  Option `:display` is the string form of Kit `SelectItem::display_title`
-  (trigger copy); Kit's API is `Option<AnyElement>`. Omitted, the trigger
+  Option `:display` is text or a widget for Kit `SelectItem::display_title`. Omitted, the trigger
   uses `:label`. `:disabled` greys a row.
 
   A controlled value change uses Kit `set_selected_value` so a live
@@ -1307,13 +1337,13 @@
   agree; an unrelated rerender with the same options and id does not.
 
   Kit Select chrome: `:cleanable`, `:title-prefix`, `:menu-width` /
-  `:menu-max-h` (px), `:search-placeholder`, `:empty` (string form of
-  Kit `Select::empty`; Kit accepts arbitrary `IntoElement`), `:icon`,
+  `:menu-max-h` (px), `:search-placeholder`, `:empty` (text or widget), `:icon`,
   `:appearance`, `:focus-ring` (Kit `FocusableExt`; omit = Kit true),
   `:accessibility-label`. Kit 0.6.4's styled Select does not forward its
   base dismiss event, so there is deliberately no `:on-dismiss`; selection
   confirmation remains distinct from merely closing the menu. Group titles are not selectable and are not
-  in the callback id map. Custom row/section `render` is not wrapped.
+  in the callback id map. Items accept `:content` and a widget `:display`;
+  groups accept a widget `:header`. `:empty` accepts text or a widget.
 
   (ui/select selected
     {:options [{:id :clj :label \"Clojure\"} {:id :rs :label \"Rust\"}]
@@ -1362,8 +1392,8 @@
   omitted or `nil` releases control and leaves the native query;
   `\"clj\"` sets it; `\"\"` clears it. Kit `ComboboxEvent` has no
   query variant, so there is no `:on-query` (unlike `ui/command`).
-  Custom `render_trigger` / `footer` and empty as `IntoElement` are
-  not wrapped.
+  `:trigger`, `:footer`, and `:empty` accept widgets. Items accept `:content`
+  and a widget `:display`; groups accept a widget `:header`.
 
   A single-select pick can emit Kit `Change` then `Confirm` for one
   user action. The host sends `:on-change` then `:on-confirm` as one
@@ -1546,10 +1576,15 @@
 
 (defn- description-item [item]
   (if (map? item)
-    (cond-> {:id (str (or (:label item) ""))
-             :label (str (or (:label item) ""))
-             :text (str (or (:value item) (:text item) ""))}
-      (some? (:span item)) (assoc :span (:span item)))
+    (let [label (:label item)
+          value (or (:value item) (:text item))]
+      (cond-> {:id (str (or (:id item) label ""))
+               :label (if (ui-node? label) "" (str (or label "")))
+               :text (if (ui-node? value) "" (str (or value "")))}
+        (ui-node? label) (assoc :display-content label)
+        (ui-node? value) (assoc :content value)
+        (contains? item :separator) (assoc :separator (:separator item))
+        (some? (:span item)) (assoc :span (:span item))))
     {:id (str item) :label (str item) :text ""}))
 
 (defn description-list
@@ -1731,8 +1766,7 @@
   handles Enter without automatically confirming/closing the dialog.
   Give buttons stable `:id` values when rows can be removed or reordered,
   so queued clicks keep targeting the same item after a body update.
-  Other stateful controls are
-  not yet supported in dialog content.
+  Editors, collections and other widgets also use the production renderer.
 
   (ui/dialog open?
     {:title \"Delete?\" :variant :confirm :ok-text \"Delete\"
@@ -1991,6 +2025,17 @@
              :items (menu-items raw)}
             opts))))
 
+(defn app-menu-bar
+  "Kit's in-window application menu bar. Items are named menus with nested
+  `:items`; leaf actions and `:on-change` use the same semantic paths as
+  `native-menu`. Intended for Windows/Linux window chrome; also renders on
+  macOS when explicitly included. This does not replace the OS menu bar."
+  ([items] (app-menu-bar items nil))
+  ([items opts]
+   (let [raw (or items [])]
+     (merge {:type :app-menu-bar :items (menu-items raw)}
+            (with-nested-option-callback (or opts {}) raw)))))
+
 (defn command
   "Command palette. Kit `Command` with host-held `CommandState`.
 
@@ -2031,10 +2076,9 @@
   search-field spinner. `:bordered false` drops Kit's surrounding
   chrome (default true). `:menu-max-h` is Kit `Command::max_h` in px
   (not widget `:height`). `:on-query` receives the search string.
-  `:on-cancel` is 0-arg (empty-query Escape). String `:empty` is the
-  string form of Kit `Command::empty`. `CommandItem::child` and
-  arbitrary empty/header/footer `AnyElement` are not wrapped.
-  `CommandState::matched_count` is native-only (not on the wire).
+  `:on-cancel` is 0-arg (empty-query Escape). `:empty`, `:header`, and
+  `:footer` accept widgets. Items accept `:content` and `:children`.
+  `:on-matched-count` receives the native filtered count when it changes.
 
   (ui/command
     [{:id :copy :label \"Copy\" :icon :copy :keywords [:duplicate]}
@@ -2122,8 +2166,9 @@
   `load_more` only after a callback is sent, and resets that latch
   when rows / `:has-more` / `:loading` change or when `:on-load-more`
   appears (`nil` → present). A regenerated wire id (`cb-1` → `cb-2`)
-  for the same handler does not reset it. Custom empty widgets are
-  not wrapped.
+  for the same handler does not reset it. `:empty`, `:loading-content`,
+  and item `:content` accept widgets. Nested `:items` create sections with
+  widget `:header` / `:footer`.
 
   (ui/list items {:selected sel :on-change set-sel! :searchable true :height 200})
   (ui/list items {:searchable true :search-placeholder \"Filter…\"})"
@@ -2135,7 +2180,7 @@
                   rewrite-selected
                   apply-control-size)
          selected (:value opts)
-         opts (cond-> (with-id-callbacks
+         opts (cond-> (with-selectable-option-callbacks
                         (dissoc opts :items :options :value)
                         raw
                         [:on-change :on-confirm])
@@ -2148,11 +2193,9 @@
 (defn data-table
   "Virtualized data table (Kit DataTable). `:columns` are `{id, label, width}`
   maps (not the description-list `:columns` count). `:rows` are
-  `{id, cells [...]}`. A cell is a string or a supported RenderOnce
-  cell node (progress, tag, badge, avatar, stacks, …). Kit `render_td`
-  paints that node via the overlay static painter; stateful widgets
-  such as input, editor, list, and data-table are not their real
-  implementations there. The host does not stringify widget cells.
+  `{id, cells [...]}`. A cell is a string or any clj-gpui widget,
+  including retained inputs, editors, lists, and nested tables. Cell identity
+  follows the row and column ids across sorting and reordering.
   `on-change` receives the selected row's original
   id, or `{:row … :col …}` when `:cell-selectable` is on. `:on-confirm`
   (or `:on-double-click`) fires on double-click with that same payload.
@@ -2199,8 +2242,12 @@
   only after a callback is sent, and resets that latch when rows /
   `:has-more` / `:loading` change or when `:on-load-more` appears
   (`nil` → present). A regenerated wire id (`cb-1` → `cb-2`) for the
-  same handler does not reset it. Context menus and custom
-  `render_th` / `render_loading` are not wrapped.
+  same handler does not reset it. `:context-menu`, column/group `:content`,
+  `:header-style`, `:row-style`, per-row `:style`, `:last-column-content`,
+  and `:loading-content` map to native presentation hooks. `:on-visible-rows`
+  and `:on-visible-columns` receive exclusive-end `{:start :end}` ranges.
+  `:scroll-to-row` / `:scroll-to-column` accept ids or indices; use
+  `:scroll-generation` to repeat a request.
 
   `ui/table` is Kit's declarative (non-virtualized) Table.
 
@@ -2703,19 +2750,30 @@
                  opts)))
 
 (defn editor
-  "Code editor wrapping Kit `Editor` / `EditorState`. Not an LSP
-  editor. `:language` is a highlighter name (`\"rust\"`, `\"json\"`,
+  "Code editor wrapping Kit `Editor` / `EditorState`. Optional `:lsp`
+  functions provide native language features; see docs/editor-providers.md. `:language` is a highlighter name (`\"rust\"`, `\"json\"`,
   `\"markdown\"`, `\"clojure\"`; omitted is `\"text\"`). Kit's
   `tree-sitter-languages` bundle and a Clojure grammar are enabled. Clojure
   auto-pairs `()`, `[]`, `{}` and double quotes outside strings/comments,
   and indents after opening delimiters. `:auto-close` and `:smart-indent`
   default to true independently; explicit false is applied live without
-  replacing editor state. `on-change` receives the string. Multi-cursor
+  replacing editor state. `:soft-wrap`, `:folding`, `:line-number`, and
+  `:indent-guides` default true; `:show-whitespaces` and `:hard-tabs` default
+  false. `:tab-size` defaults 2, `:wrapping-indent` is `:same` or `:none`.
+  `:scroll-beyond-last-line` and `:cursor-surrounding-lines` take row counts.
+  `:selected-range [start end]` uses UTF-8 byte offsets; change
+  `:selection-generation` to repeat it. `:diagnostics` contains standard LSP
+  diagnostics; `:decorations` contains byte-range highlight maps. See
+  docs/editor-providers.md for annotation shapes and update semantics.
+  `on-change` receives the string. Multi-cursor
   editing is native: Option-click adds a cursor, Option-drag makes a column
   selection, and Cmd-Option-Up/Down adds a cursor vertically on macOS
   (Ctrl-Option or Shift-Option Up/Down are cross-platform aliases). Kit chrome: `:appearance`, `:bordered` (omit =
-  Kit true), `:readonly`, `:accessibility-label`. Custom `context_menu`
-  builders are not wrapped.
+  Kit true), `:readonly`, `:accessibility-label`, and `:context-menu`.
+  `:search` controls the native search session: `:query`, `:case-insensitive`,
+  `:open`, `:replace-mode`, `:action` (`:next`, `:previous`, `:replace`,
+  `:replace-all`, `:close`), `:replacement`, and `:generation`. Change the
+  generation to repeat an action. `:on-paste` and `:paste-policy` work as on input.
 
   (ui/editor src {:language \"rust\" :height 200 :on-change set!})
   (ui/editor src {:language \"rust\" :readonly true})"
@@ -2848,7 +2906,7 @@
 
 (defn radar-chart
   "See `chart` with `:radar`. Dimension `:content` is a Kit `RadarLabel::Element`
-  (badge, avatar, and other clj-gpui widgets, not only the static overlay subset)."
+  (badge, avatar, and other clj-gpui widgets)."
   ([points] (chart :radar points nil))
   ([points opts] (chart :radar points opts)))
 
@@ -2868,14 +2926,22 @@
   "Markdown `TextView`. `:selectable` is Kit text selection (omit = true).
   `:frontmatter true` enables YAML frontmatter parsing and structured
   rendering; omitted/false preserves ordinary Markdown behavior.
-  `:height` or `:flex 1` makes it scroll.
+  `:height` or `:flex 1` makes it scroll. `:extensions` provides source-targeted
+  block/inline widgets; see docs/widget-composition.md. `:text-style`,
+  `:text-motion`, `:stream-fade`, `:scrollable`, `:max-lines`, `:mdx`,
+  `:selection-format`, `:code-block-actions`, `:table-actions` and
+  `:on-link-click` forward the corresponding native controls.
 
   (ui/markdown \"# Hello\")
   (ui/markdown body {:selectable false})"
   ([text]
    {:type :markdown :text (str (or text ""))})
   ([text opts]
-   (merge {:type :markdown :text (str (or text ""))} (or opts {}))))
+   (let [body (str (or text ""))
+         extensions (:extensions opts)
+         extensions (if (fn? extensions) (extensions body) extensions)]
+     (cond-> (merge {:type :markdown :text body} (dissoc (or opts {}) :extensions))
+       (some? extensions) (assoc :items (option-items extensions))))))
 
 (defn html
   "HTML `TextView`. Same `:selectable` / layout notes as `markdown`.
@@ -2910,7 +2976,7 @@
                   rewrite-selected
                   apply-control-size)
          selected (:value opts)
-         opts (with-option-callback (dissoc opts :value) raw)]
+         opts (with-nested-option-callback (dissoc opts :value) raw)]
      (merge-widget {:type :sidebar
                     :value (wire-id selected)
                     :items (option-items raw)}
@@ -2949,8 +3015,13 @@
 (defn dock
   "Dock area. Items are `{id, label, side, content}` maps. `:side` is
   `:left`, `:right`, `:bottom`, or `:center` (default). Panel bodies
-  are the static overlay subset (label / button / stack / separator)
-  plus `markdown` and `chart` — not list/data-table/editor.
+  accept arbitrary widgets, including retained editors and collections.
+  `:selected` selects a panel id. Items also accept `:header`, `:suffix`,
+  `:title-style`, `:title-bar`, `:inner-padding`, `:closable`, `:zoomable`,
+  `:visible`, `:tab-name`, and `:zoom-control`. `:on-layout-change` emits a
+  layout dump which `:dock-layout` restores; `:on-panel-event` reports panel
+  lifecycle. `:dock-options` controls locking and dock regions. See
+  docs/widget-composition.md.
 
   (ui/dock {:items [{:id :files :side :left :label \"Files\"
                      :content (ui/markdown \"…\")}]})"
@@ -2958,7 +3029,7 @@
    (let [opts (if (map? opts) opts {})
          raw (or (:items opts) [])]
      (merge-widget {:type :dock :items (option-items raw)}
-                   (dissoc opts :items)))))
+                   (dissoc (rewrite-selected opts) :items)))))
 
 (defn resizable
   "Split panes. `:orientation` is `:horizontal` (default) or
@@ -3448,9 +3519,8 @@
   of playback-driven `:scroll-generation`). Omit the delay to keep following
   locked, or omit `:follow-child` to allow ordinary manual scrolling. Kit's
   constructor takes an arbitrary row renderer (`IntoElement`); scroller
-  rows here paint the static overlay subset plus this chat family
-  (not list / data-table / editor) because they cannot re-enter
-  `RootView`.
+  rows use the production renderer for arbitrary widgets, including editors
+  and collections.
 
   (ui/message-scroller {:id \"chat\" :height 400
                         :jump-button-label \"Jump tooltip\"
@@ -3513,10 +3583,8 @@
 
 (defn nav-page
   "A page template in a `ui/nav-stack` catalog. `:id` is required
-  (keyword or string). Children paint through the overlay static
-  subset plus the chat family — the same set as dock panels and
-  message-scroller rows — because a live stack page cannot re-enter
-  `RootView`. Not list / data-table / editor.
+  (keyword or string). Children use the production renderer, including retained inputs,
+  editors, lists and tables.
 
   (ui/nav-page {:id :home} (ui/label \"Home\"))"
   [opts-or-child & children]
@@ -3585,8 +3653,8 @@
   Kit's default unchanged `NavPage` renderer. This is a
   host-evaluated recipe, not Kit's arbitrary
   `Fn(NavPage, &mut Window, &mut App) -> AnyElement`. `:overflow :hidden` or
-  `:overflow-hidden true` clips; omitted does not. Pages paint
-  the overlay static subset (not list / data-table / editor).
+  `:overflow-hidden true` clips; omitted does not. Pages use the production
+  renderer and accept arbitrary widgets, including editors and collections.
 
   (ui/nav-stack {:id \"nav\" :stack [:home :detail] :transition 0.22
                  :item [{:phase :entering :operation [:push :replace]
@@ -3627,3 +3695,249 @@
                    :type :nav-stack
                    :children pages)
       (or explicit? (some? raw)) (assoc :value (wire-selected raw)))))
+
+;; Composable Kit primitives. Child-bearing slots use ordinary UI nodes.
+
+(defn empty
+  "Empty state; compose empty-header and empty-content."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :empty :children (flatten-children children)} opts)))
+
+(defn empty-header
+  "Empty state header: empty-media, empty-title and empty-description."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :empty-header :children (flatten-children children)} opts)))
+
+(defn empty-media
+  "Empty media. :variant :icon selects the framed icon presentation."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :empty-media :children (flatten-children children)} opts)))
+
+(defn empty-title
+  "Empty state title."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :empty-title :children (flatten-children children)} opts)))
+
+(defn empty-description
+  "Empty state description."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :empty-description :children (flatten-children children)} opts)))
+
+(defn empty-content
+  "Empty state actions and body."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :empty-content :children (flatten-children children)} opts)))
+
+(defn collapsible
+  "Controlled reveal. :open controls :content; children stay visible."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :collapsible :children (flatten-children children)} opts)))
+
+(defn form
+  "Native form. :orientation sets label layout; :columns sets the field grid."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :form :children (flatten-children children)} opts)))
+
+(defn field
+  "Native form field. :title, :description, :required, :col-span, :col-start and :col-end."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :field :children (flatten-children children)} opts)))
+
+(defn button-group
+  "Native button group. :multiple, :compact, :outline, :orientation; :on-change receives selected indices."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :button-group :children (flatten-children children)} opts)))
+
+(defn input-group
+  "Native input group: one input or textarea plus input-group-addon children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :input-group :children (flatten-children children)} opts)))
+
+(defn input-group-addon
+  "Input addon. :align is :inline-start, :inline-end, :block-start or :block-end."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :input-group-addon :children (flatten-children children)} opts)))
+
+(defn input-group-button
+  "Native addon action; inherits group disabled state."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :input-group-button :children (flatten-children children)} opts)))
+
+(defn input-group-text
+  "Native input addon text."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :input-group-text :children (flatten-children children)} opts)))
+
+(defn carousel
+  "Native carousel. :value is selected index; :on-change receives index; :looping and :orientation."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :carousel :children (flatten-children children)} opts)))
+
+(defn carousel-content
+  "Carousel viewport; :track-style styles the inner track."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :carousel-content :children (flatten-children children)} opts)))
+
+(defn carousel-item
+  "Carousel slide; position follows child order."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :carousel-item :children (flatten-children children)} opts)))
+
+(defn carousel-previous
+  "Native previous-slide button."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :carousel-previous :children (flatten-children children)} opts)))
+
+(defn carousel-next
+  "Native next-slide button."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :carousel-next :children (flatten-children children)} opts)))
+
+(defn carousel-pagination
+  "Carousel pagination container."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :carousel-pagination :children (flatten-children children)} opts)))
+
+(defn carousel-pagination-item
+  "Carousel dot; :value is its slide index."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :carousel-pagination-item :children (flatten-children children)} opts)))
+
+(defn calendar
+  "Inline Kit calendar. Same ISO value and range shape as date-picker."
+  ([value] (calendar value {}))
+  ([value opts] (merge-widget {:type :calendar :value value} opts)))
+
+(defn radio
+  "Standalone native radio. :on-change receives its checked boolean."
+  ([checked] (radio checked {}))
+  ([checked opts] (merge-widget {:type :radio :checked (boolean-state checked)} opts)))
+
+(defn dialog-content
+  "Native Kit dialog-content primitive with arbitrary widget children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :dialog-content :children (flatten-children children)} opts)))
+
+(defn dialog-header
+  "Native Kit dialog-header primitive with arbitrary widget children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :dialog-header :children (flatten-children children)} opts)))
+
+(defn dialog-title
+  "Native Kit dialog-title primitive with arbitrary widget children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :dialog-title :children (flatten-children children)} opts)))
+
+(defn dialog-description
+  "Native Kit dialog-description primitive with arbitrary widget children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :dialog-description :children (flatten-children children)} opts)))
+
+(defn dialog-footer
+  "Native Kit dialog-footer primitive with arbitrary widget children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :dialog-footer :children (flatten-children children)} opts)))
+
+(defn sidebar-header
+  "Native Kit sidebar-header primitive with arbitrary widget children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :sidebar-header :children (flatten-children children)} opts)))
+
+(defn sidebar-footer
+  "Native Kit sidebar-footer primitive with arbitrary widget children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :sidebar-footer :children (flatten-children children)} opts)))
+
+(defn list-item
+  "Native Kit list-item primitive with arbitrary widget children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :list-item :children (flatten-children children)} opts)))
+
+(defn list-separator-item
+  "Native Kit list-separator-item primitive with arbitrary widget children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :list-separator-item :children (flatten-children children)} opts)))
+
+(defn searchable-list-item
+  "Native Kit searchable-list-item primitive with arbitrary widget children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :searchable-list-item :children (flatten-children children)} opts)))
+
+(defn tab
+  "Native Kit tab primitive with arbitrary widget children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :tab :children (flatten-children children)} opts)))
+
+(defn stepper-item
+  "Native Kit stepper-item primitive with arbitrary widget children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :stepper-item :children (flatten-children children)} opts)))
+
+(defn dialog-close
+  "Kit DialogClose. Children or a button :trigger close the enclosing dialog."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :dialog-close :children (flatten-children children)} opts)))
+
+(defn dialog-action
+  "Kit DialogAction. Activating a child confirms the enclosing dialog."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :dialog-action :children (flatten-children children)} opts)))
+
+(defn sidebar-group
+  "Native Kit sidebar-group; accepts options and widget children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :sidebar-group :children (flatten-children children)} opts)))
+
+(defn sidebar-menu
+  "Native Kit sidebar-menu; accepts options and widget children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :sidebar-menu :children (flatten-children children)} opts)))
+
+(defn sidebar-menu-item
+  "Native Kit sidebar-menu-item; accepts options and widget children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :sidebar-menu-item :children (flatten-children children)} opts)))
+
+(defn sidebar-toggle-button
+  "Native Kit sidebar-toggle-button; accepts options and widget children."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :sidebar-toggle-button :children (flatten-children children)} opts)))

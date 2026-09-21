@@ -734,6 +734,65 @@ impl<'de> Deserialize<'de> for TableCell {
 /// Collection item for radios, select, tabs, breadcrumbs, accordion, etc.
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 pub struct Item {
+    #[serde(default, rename = "source-range")]
+    pub source_range: Option<[usize; 2]>,
+    #[serde(default, rename = "source-pattern")]
+    pub source_pattern: Option<String>,
+    #[serde(default)]
+    pub baseline: Option<f32>,
+    #[serde(default)]
+    pub href: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub resettable: Option<bool>,
+    #[serde(default)]
+    pub dirty: Option<bool>,
+    #[serde(default)]
+    pub scrollable: Option<bool>,
+    #[serde(default)]
+    pub orientation: Option<String>,
+    #[serde(default, rename = "default-value")]
+    pub default_value: Option<Value>,
+    #[serde(default, rename = "on-reset")]
+    pub on_reset: Option<String>,
+
+    #[serde(default, rename = "title-bar")]
+    pub title_bar: Option<bool>,
+    #[serde(default, rename = "inner-padding")]
+    pub inner_padding: Option<bool>,
+    #[serde(default, rename = "closable")]
+    pub closable: Option<bool>,
+    #[serde(default, rename = "zoomable")]
+    pub zoomable: Option<bool>,
+    #[serde(default, rename = "visible")]
+    pub visible: Option<bool>,
+    #[serde(default, rename = "tab-name")]
+    pub tab_name: Option<String>,
+    #[serde(default, rename = "zoom-control")]
+    pub zoom_control: Option<String>,
+
+    #[serde(default, rename = "default-open")]
+    pub default_open: Option<bool>,
+    #[serde(default, rename = "click-to-open")]
+    pub click_to_open: Option<bool>,
+    #[serde(default, rename = "click-to-toggle")]
+    pub click_to_toggle: Option<bool>,
+    #[serde(default)]
+    pub suffix: Option<Content>,
+
+    #[serde(default, rename = "display-content")]
+    pub display_content: Option<Box<Node>>,
+    #[serde(default, rename = "title-style")]
+    pub title_style: Option<Box<Node>>,
+    #[serde(default, rename = "content-style")]
+    pub content_style: Option<Box<Node>>,
+    #[serde(default, rename = "hover-style")]
+    pub hover_style: Option<Box<Node>>,
+    #[serde(default, rename = "header")]
+    pub header: Option<Box<Node>>,
+    #[serde(default, rename = "footer")]
+    pub footer: Option<Box<Node>>,
     #[serde(default)]
     pub id: Option<String>,
     #[serde(default)]
@@ -937,8 +996,196 @@ impl Item {
     }
 }
 
+/// Declarative equivalent of Kit's string-or-IntoElement slots.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum Content {
+    Text(String),
+    Node(Box<Node>),
+}
+impl From<String> for Content {
+    fn from(value: String) -> Self {
+        Self::Text(value)
+    }
+}
+impl From<&str> for Content {
+    fn from(value: &str) -> Self {
+        Self::Text(value.to_string())
+    }
+}
+impl std::ops::Deref for Content {
+    type Target = str;
+    fn deref(&self) -> &str {
+        match self {
+            Self::Text(text) => text,
+            Self::Node(node) => node.text.as_deref().unwrap_or(""),
+        }
+    }
+}
+impl Content {
+    pub fn at(&self, path: String) -> Self {
+        match self {
+            Self::Text(_) => self.clone(),
+            Self::Node(node) => {
+                let mut node = node.clone();
+                if node.render_path.is_none() {
+                    node.render_path = Some(path);
+                }
+                Self::Node(node)
+            }
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        matches!(self, Self::Text(text) if text.is_empty())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 pub struct Node {
+    #[serde(default, rename = "label-layout")]
+    pub label_layout: Option<String>,
+    #[serde(default, rename = "initial-content")]
+    pub initial_content: Option<Box<Node>>,
+    #[serde(default, rename = "icon-transform")]
+    pub icon_transform: Option<Value>,
+    #[serde(default, rename = "menu-min-w")]
+    pub menu_min_w: Option<f32>,
+    #[serde(default, rename = "menu-max-w")]
+    pub menu_max_w: Option<f32>,
+    #[serde(default, rename = "check-side")]
+    pub check_side: Option<String>,
+    #[serde(default, rename = "external-link-icon")]
+    pub external_link_icon: Option<bool>,
+    #[serde(default, rename = "dock-layout")]
+    pub dock_layout: Option<Value>,
+    #[serde(default, rename = "dock-options")]
+    pub dock_options: Option<Value>,
+    #[serde(default, rename = "on-layout-change")]
+    pub on_layout_change: Option<String>,
+    #[serde(default, rename = "on-panel-event")]
+    pub on_panel_event: Option<String>,
+    #[serde(default, rename = "text-style")]
+    pub text_style: Option<Value>,
+    #[serde(default, rename = "text-motion")]
+    pub text_motion: Option<Value>,
+    #[serde(default)]
+    pub mdx: Option<bool>,
+    #[serde(default)]
+    pub lsp: Option<Value>,
+    #[serde(default, rename = "tooltip-key")]
+    pub tooltip_key: Option<String>,
+    /// Editor native search session; actions are applied once per generation.
+    #[serde(default)]
+    pub search: Option<Value>,
+    #[serde(default, rename = "on-search")]
+    pub on_search: Option<String>,
+    #[serde(default, rename = "last-column-content")]
+    pub last_column_content: Option<Box<Node>>,
+    #[serde(default, rename = "scroll-to-row")]
+    pub scroll_to_row: Option<Value>,
+    #[serde(default, rename = "scroll-to-column")]
+    pub scroll_to_column: Option<Value>,
+    #[serde(default, rename = "on-paste")]
+    pub on_paste: Option<String>,
+    #[serde(default, rename = "paste-policy")]
+    pub paste_policy: Option<String>,
+    #[serde(default, rename = "on-visible-rows")]
+    pub on_visible_rows: Option<String>,
+    #[serde(default, rename = "on-visible-columns")]
+    pub on_visible_columns: Option<String>,
+    #[serde(default, rename = "on-matched-count")]
+    pub on_matched_count: Option<String>,
+    #[serde(default, rename = "default-open")]
+    pub default_open: Option<bool>,
+    #[serde(default, rename = "click-to-open")]
+    pub click_to_open: Option<bool>,
+    #[serde(default, rename = "click-to-toggle")]
+    pub click_to_toggle: Option<bool>,
+
+    #[serde(default, rename = "tooltip-content")]
+    pub tooltip_content: Option<Box<Node>>,
+    #[serde(default, rename = "action")]
+    pub action: Option<Box<Node>>,
+    #[serde(default, rename = "context-menu")]
+    pub context_menu: Vec<Item>,
+    #[serde(default, rename = "delivery")]
+    pub delivery: Option<String>,
+    #[serde(default, rename = "stream-fade")]
+    pub stream_fade: Option<bool>,
+    #[serde(default, rename = "scrollable")]
+    pub scrollable: Option<bool>,
+    #[serde(default, rename = "selection-format")]
+    pub selection_format: Option<String>,
+    #[serde(default, rename = "max-lines")]
+    pub max_lines: Option<usize>,
+    #[serde(default, rename = "code-block-actions")]
+    pub code_block_actions: Option<Box<Node>>,
+    #[serde(default, rename = "table-actions")]
+    pub table_actions: Option<Box<Node>>,
+    #[serde(default, rename = "on-link-click")]
+    pub on_link_click: Option<String>,
+    #[serde(default, rename = "on-hover")]
+    pub on_hover: Option<String>,
+    #[serde(skip)]
+    pub render_path: Option<String>,
+    #[serde(skip)]
+    pub source_path: Option<String>,
+    #[serde(default, rename = "content")]
+    pub content: Option<Box<Node>>,
+    #[serde(default, rename = "header")]
+    pub header: Option<Box<Node>>,
+    #[serde(default, rename = "description")]
+    pub description: Option<Content>,
+    #[serde(default, rename = "label-content")]
+    pub label_content: Option<Box<Node>>,
+    #[serde(default, rename = "title-style")]
+    pub title_style: Option<Box<Node>>,
+    #[serde(default, rename = "header-style")]
+    pub header_style: Option<Box<Node>>,
+    #[serde(default, rename = "sidebar-style")]
+    pub sidebar_style: Option<Box<Node>>,
+    #[serde(default, rename = "hover-style")]
+    pub hover_style: Option<Box<Node>>,
+    #[serde(default, rename = "track-style")]
+    pub track_style: Option<Box<Node>>,
+    #[serde(default, rename = "loading-content")]
+    pub loading_content: Option<Box<Node>>,
+    #[serde(default, rename = "trigger-style")]
+    pub trigger_style: Option<Box<Node>>,
+    #[serde(default, rename = "default-selected-index")]
+    pub default_selected_index: Option<usize>,
+    #[serde(default, rename = "label-text-size")]
+    pub label_text_size: Option<f32>,
+    #[serde(default, rename = "col-span")]
+    pub col_span: Option<u16>,
+    #[serde(default, rename = "col-start")]
+    pub col_start: Option<i16>,
+    #[serde(default, rename = "col-end")]
+    pub col_end: Option<i16>,
+    #[serde(default, rename = "looping")]
+    pub looping: Option<bool>,
+    #[serde(default, rename = "invalid")]
+    pub invalid: Option<bool>,
+    #[serde(default, rename = "required")]
+    pub required: Option<bool>,
+    #[serde(default, rename = "label-indent")]
+    pub label_indent: Option<bool>,
+    #[serde(default, rename = "show-cancel")]
+    pub show_cancel: Option<bool>,
+    #[serde(default, rename = "margin-top")]
+    pub margin_top: Option<f32>,
+    #[serde(default, rename = "checked-color")]
+    pub checked_color: Option<String>,
+    #[serde(default, rename = "mouse-button")]
+    pub mouse_button: Option<String>,
+    #[serde(default, rename = "date-format")]
+    pub date_format: Option<String>,
+    #[serde(default, rename = "presets")]
+    pub presets: Vec<Item>,
+    #[serde(default, rename = "year-range")]
+    pub year_range: Option<[i32; 2]>,
+    #[serde(default, rename = "disabled-dates")]
+    pub disabled_dates: Vec<String>,
     #[serde(rename = "type", default)]
     pub kind: String,
     #[serde(default)]
@@ -1173,7 +1420,7 @@ pub struct Node {
     /// Kit `empty` / `render_empty` when there are no rows. Kit accepts
     /// arbitrary `IntoElement`; custom empty widgets are not wrapped yet.
     #[serde(default)]
-    pub empty: Option<String>,
+    pub empty: Option<Content>,
     /// Select / Combobox: Kit `FocusableExt::focus_ring`. Omitted leaves Kit's true.
     #[serde(default, rename = "focus-ring")]
     pub focus_ring: Option<bool>,
@@ -1232,6 +1479,38 @@ pub struct Node {
     /// Editor preference. Omitted preserves Kit's `true` default/current value.
     #[serde(default, rename = "smart-indent")]
     pub smart_indent: Option<bool>,
+    #[serde(default, rename = "soft-wrap")]
+    pub soft_wrap: Option<bool>,
+    #[serde(default)]
+    pub folding: Option<bool>,
+    #[serde(default, rename = "line-number")]
+    pub line_number: Option<bool>,
+    #[serde(default, rename = "indent-guides")]
+    pub indent_guides: Option<bool>,
+    #[serde(default, rename = "show-whitespaces")]
+    pub show_whitespaces: Option<bool>,
+    #[serde(default, rename = "hard-tabs")]
+    pub hard_tabs: Option<bool>,
+    #[serde(default, rename = "tab-size")]
+    pub tab_size: Option<usize>,
+    #[serde(default, rename = "wrapping-indent")]
+    pub wrapping_indent: Option<String>,
+    #[serde(default, rename = "scroll-beyond-last-line")]
+    pub scroll_beyond_last_line: Option<usize>,
+    #[serde(default, rename = "cursor-surrounding-lines")]
+    pub cursor_surrounding_lines: Option<usize>,
+    #[serde(default, rename = "auto-grow")]
+    pub auto_grow: Option<[usize; 2]>,
+    #[serde(default, rename = "selected-range")]
+    pub selected_range: Option<[usize; 2]>,
+    #[serde(default, rename = "selection-generation")]
+    pub selection_generation: Option<Value>,
+    #[serde(default)]
+    pub diagnostics: Vec<Value>,
+    #[serde(default)]
+    pub decorations: Vec<Value>,
+    #[serde(default, rename = "decoration-generation")]
+    pub decoration_generation: Option<Value>,
     /// Markdown-only opt-in for YAML frontmatter parsing and structured rendering.
     #[serde(default)]
     pub frontmatter: bool,
@@ -1263,10 +1542,10 @@ pub struct Node {
     pub content_type: Option<String>,
     /// Input / number-input: prefix text. When omitted, `icon` is the prefix.
     #[serde(default)]
-    pub prefix: Option<String>,
+    pub prefix: Option<Content>,
     /// Input / number-input: suffix text.
     #[serde(default)]
-    pub suffix: Option<String>,
+    pub suffix: Option<Content>,
     /// OTP: Kit `groups` (clusters of cells). Omitted is Kit 2.
     /// `0` is forwarded so Kit `resolved_groups` can clamp to 1.
     #[serde(default)]
@@ -1840,6 +2119,37 @@ impl Node {
                 .jump_button_renderer
                 .as_ref()
                 .is_some_and(|node| node.contains_text(needle))
+            || [
+                &self.content,
+                &self.header,
+                &self.label_content,
+                &self.loading_content,
+                &self.initial_content,
+                &self.tooltip_content,
+                &self.action,
+                &self.code_block_actions,
+                &self.table_actions,
+                &self.last_column_content,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|node| node.contains_text(needle))
+            || [&self.prefix, &self.suffix, &self.empty, &self.description]
+                .into_iter()
+                .flatten()
+                .any(|content| match content {
+                    Content::Text(text) => text.contains(needle),
+                    Content::Node(node) => node.contains_text(needle),
+                })
+            || self
+                .context_menu
+                .iter()
+                .any(|item| item_contains(item, needle))
+            || self
+                .header_groups
+                .iter()
+                .flatten()
+                .any(|item| item_contains(item, needle))
             || self.left.iter().any(|child| child.contains_text(needle))
             || self.right.iter().any(|child| child.contains_text(needle))
     }
@@ -1903,6 +2213,14 @@ fn item_contains(item: &Item, needle: &str) -> bool {
             .content
             .as_ref()
             .is_some_and(|node| node.contains_text(needle))
+        || [&item.header, &item.footer, &item.display_content]
+            .into_iter()
+            .flatten()
+            .any(|node| node.contains_text(needle))
+        || item.suffix.as_ref().is_some_and(|content| match content {
+            Content::Text(text) => text.contains(needle),
+            Content::Node(node) => node.contains_text(needle),
+        })
         || item
             .children
             .iter()
@@ -1914,6 +2232,11 @@ fn item_contains(item: &Item, needle: &str) -> bool {
 
 #[derive(Debug, Clone)]
 pub enum Cmd {
+    Provider {
+        id: String,
+        params: Value,
+        response: async_channel::Sender<Result<Value, String>>,
+    },
     Render,
     Callback {
         id: String,

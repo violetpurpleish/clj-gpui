@@ -645,3 +645,55 @@
       (is (nil? (#'runtime/preview-png* 50)))
       (finally
         (runtime/bind-connection! nil)))))
+
+(deftest editor-providers-return-values-and-survive-ordinary-rerenders
+  (let [editor (fn [value] (ui/editor "hello" {:id :source :lsp {:hover (fn [params] {:contents (str value (:offset params))})}}))
+        first-tree (runtime/export-tree (editor "first"))
+        provider (get-in first-tree [:lsp :hover])]
+    (is (string? provider))
+    (is (= {:ok true :value {:contents "first3"}}
+           (runtime/invoke-provider! provider {:offset 3})))
+    (is (= provider (get-in (runtime/export-tree (editor "second")) [:lsp :hover])))
+    (is (= {:ok true :value {:contents "second8"}}
+           (runtime/invoke-provider! provider {:offset 8})))
+    (runtime/export-tree (ui/label "removed"))
+    (is (false? (:ok (runtime/invoke-provider! provider {}))))))
+
+(deftest editor-provider-rpc-runs-outside-the-message-loop
+  (let [entered (promise)
+        release (promise)
+        replies (atom [])
+        tree (runtime/export-tree
+              (ui/editor "" {:id "async" :lsp {:hover (fn [_] (deliver entered true) @release)}}))
+        provider (get-in tree [:lsp :hover])]
+    (with-redefs [runtime/send! #(swap! replies conj %)]
+      (let [pending (runtime/handle {:op "provider" :provider-id provider :params {} :id 41})]
+        (try
+          (is (= true (deref entered 2000 :timeout)))
+          (is (empty? @replies))
+          (runtime/handle {:op "unknown" :id 42})
+          (is (= 42 (:id (first @replies))))
+          (deliver release {:contents "async result"})
+          (deref pending 2000 :timeout)
+          (is (= {:op "response" :id 41 :ok true :value {:contents "async result"}}
+                 (last @replies)))
+          (finally (deliver release nil)))))))
+
+(deftest editor-presentation-options-and-annotations-survive-export
+  (let [props {:id "editor-options" :soft-wrap false :folding false
+               :line-number false :indent-guides false :show-whitespaces true
+               :tab-size 4 :hard-tabs true :wrapping-indent :none
+               :selected-range [1 4] :selection-generation 3
+               :diagnostics [{:range {:start {:line 0 :character 1}
+                                      :end {:line 0 :character 3}}
+                              :severity 2 :message "Warning"}]
+               :decorations [{:range [1 4] :background "#553311" :underline :wavy}]}
+        exported (runtime/export-tree (ui/editor "hello" props))]
+    (doseq [key [:soft-wrap :folding :line-number :indent-guides]]
+      (is (false? (get exported key))))
+    (is (= "none" (:wrapping-indent exported)))
+    (is (= (:diagnostics props) (:diagnostics exported)))
+    (is (= "wavy" (get-in exported [:decorations 0 :underline])))
+    (is (= [1 4] (:selected-range exported)))
+    (is (= [2 8] (:auto-grow (runtime/export-tree
+                              (ui/textarea "hello" {:auto-grow [2 8]})))))))

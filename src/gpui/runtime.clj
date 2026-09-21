@@ -20,6 +20,8 @@
 
 (defonce ^:private conn (atom nil))
 (defonce ^:private callbacks (atom {}))
+(defonce ^:private providers (atom {}))
+(def ^:dynamic *provider-export* nil)
 ;; Process-lifetime monotonic. Never reset: a stale cb-N must stay unknown.
 (defonce ^:private callback-counter (atom 0))
 (defonce ^:private render-scheduled? (atom false))
@@ -174,10 +176,10 @@
     id))
 
 (def ^:private callback-keys
-  [:on-click :on-change :on-release :on-submit :on-double-click :on-blur
+  [:on-layout-change :on-panel-event :on-click :on-change :on-release :on-submit :on-double-click :on-blur
    :on-escape :on-close :on-copied :on-ok :on-cancel :on-confirm
-   :on-open-change :on-forward-change :on-query :on-select :on-export
-   :on-sort :on-load-more])
+   :on-open-change :on-forward-change :on-search :on-query :on-select :on-export
+   :on-reset :on-sort :on-load-more :on-link-click :on-hover :on-paste :on-visible-rows :on-visible-columns :on-matched-count])
 
 (declare sanitize)
 
@@ -195,16 +197,16 @@
   #{:disabled :separator :expanded})
 
 (def ^:private node-boolean-overrides
-  #{:checked :interactive :filterable :bordered :focus-ring :open :overlay-closable
+  #{:soft-wrap :folding :line-number :indent-guides :show-whitespaces :hard-tabs :external-link-icon :mdx :checked :interactive :filterable :bordered :focus-ring :open :overlay-closable
     :autohide :auto-close :smart-indent :label-axis :value-axis :grid :labels :x-axis
     :node-label :value-label :reuse-forward :appearance :content-inset :scrollbar
     :jump-button :scroll-to-end :cell-selectable :row-header :stripe :sortable
     :col-movable :col-resizable :col-fixed :loop-selection :row-selectable
     :col-selectable :selectable :toggled :tab-stop :visible :close-button :keyboard
-    :overlay :resizable :menu})
+    :default-open :click-to-open :click-to-toggle :overlay :resizable :menu :looping :invalid :required :label-indent :show-cancel :stream-fade :scrollable})
 
 (def ^:private item-boolean-overrides
-  #{:selectable :resizable :movable :checked})
+  #{:resettable :dirty :scrollable :title-bar :inner-padding :closable :zoomable :visible :selectable :resizable :movable :checked :default-open :click-to-open :click-to-toggle})
 
 (def ^:private styled-boolean-overrides
   #{:strikethrough :shadow :truncate :overflow-hidden})
@@ -255,7 +257,7 @@
                    ;; A TableCell object is a Node even without a :type key.
                    (update-typed-sequence :cells prepare-node-booleans path))]
       (reduce (fn [m k] (update-typed m k prepare-node-booleans path))
-              item [:content :style :label-style]))
+              item [:content :style :label-style :display-content :suffix :title-style :content-style :hover-style :header :footer]))
     item))
 
 (defn- prepare-nav-case-booleans [recipe path]
@@ -288,14 +290,14 @@
                        node [:children :left :right])
           node (reduce (fn [m k]
                          (update-typed-sequence m k prepare-item-booleans path))
-                       node [:items :options :links :series])
+                       node [:items :options :links :series :presets :context-menu])
           node (-> node
                    (update-typed :header-groups (partial map-typed-sequence
                                                          (partial map-typed-sequence prepare-item-booleans)) path)
                    (update-typed :item prepare-nav-booleans path)
                    (update-typed :custom-variant prepare-custom-variant-booleans path))]
       (reduce (fn [m k] (update-typed m k prepare-node-booleans path))
-              node [:trigger :footer :stack-style :shimmer-style :separator-style
+              node [:last-column-content :tooltip-content :action :code-block-actions :table-actions :content :header :description :label-content :prefix :suffix :empty :loading-content :initial-content :title-style :header-style :sidebar-style :hover-style :track-style :trigger-style :trigger :footer :stack-style :shimmer-style :separator-style
                     :content-style :list-style :row-style :jump-button-style
                     :jump-button-renderer]))
     node))
@@ -310,6 +312,10 @@
                     item
                     callback-keys)
       (some? (:content item)) (update :content sanitize)
+      (some? (:display-content item)) (update :display-content sanitize)
+      (some? (:suffix item)) (update :suffix sanitize)
+      (some? (:header item)) (update :header sanitize)
+      (some? (:footer item)) (update :footer sanitize)
       (seq (:children item)) (update :children #(mapv sanitize %))
       (seq (:items item)) (update :items #(mapv sanitize-item %))
       (seq (:cells item)) (update :cells #(mapv (fn [cell]
@@ -321,9 +327,24 @@
     item))
 
 (def ^:private nested-node-keys
-  [:trigger :footer :stack-style :shimmer-style :separator-style
+  [:last-column-content :tooltip-content :action :code-block-actions :table-actions :content :header :description :label-content :prefix :suffix :empty :loading-content :initial-content :title-style :header-style :sidebar-style :hover-style :track-style :trigger-style :trigger :footer :stack-style :shimmer-style :separator-style
    :content-style :list-style :row-style :jump-button-style
    :jump-button-renderer :left :right])
+
+(defn- sanitize-providers [node]
+  (if (map? (:lsp node))
+    (let [id (:id node)]
+      (when-not (and (some? id) (seq (str id)))
+        (throw (ex-info "Editor :lsp requires a stable :id" {})))
+      (update node :lsp
+              (fn [lsp]
+                (into {} (for [[method value] lsp]
+                           [method (if (fn? value)
+                                     (let [key (str "lsp/" (pr-str [(str id) (name method)]))]
+                                       (swap! *provider-export* assoc key value)
+                                       key)
+                                     value)])))))
+    node))
 
 (defn- sanitize
   "Replace Clojure functions in the UI tree with callback ids before JSON."
@@ -334,13 +355,14 @@
                          (if (fn? (get m k))
                            (assoc m k (register-callback! (get m k)))
                            m))
-                       node
+                       (sanitize-providers node)
                        callback-keys)]
       (reduce (fn [n k]
                 (cond-> n (some? (get n k)) (update k sanitize)))
               (-> node
                   (update :children #(mapv sanitize (or % [])))
                   (cond-> (seq (:items node)) (update :items #(mapv sanitize-item %)))
+                  (cond-> (seq (:context-menu node)) (update :context-menu #(mapv sanitize-item %)))
                   (cond-> (seq (:options node)) (update :options #(mapv sanitize-item %)))
                   (cond-> (seq (:links node)) (update :links #(mapv sanitize-item %)))
                   (cond-> (seq (:series node)) (update :series #(mapv sanitize-item %))))
@@ -548,14 +570,25 @@
   [id]
   (get @callbacks id))
 
-(defn- export-node
-  [tree]
-  (json-tree
-   (sanitize
-    (prepare-node-booleans
-     (if (and @production-mode* (map? tree))
-       (assoc tree :chrome :app)
-       tree) ""))))
+(defn- export-node [tree]
+  (binding [*provider-export* (atom {})]
+    (let [exported (json-tree
+                    (sanitize
+                     (prepare-node-booleans
+                      (if (and @production-mode* (map? tree)) (assoc tree :chrome :app) tree) "")))]
+      ;; Publish atomically: retained native providers resolve the current function,
+      ;; including when an unrelated render regenerated ordinary callback ids.
+      (reset! providers @*provider-export*)
+      exported)))
+
+(defn invoke-provider! [provider-id params]
+  (if-let [f (get @providers provider-id)]
+    (try
+      (let [result (f params)
+            result (if (instance? java.util.concurrent.Future result) @result result)]
+        {:ok true :value (json-tree result)})
+      (catch Exception e {:ok false :error (str (.getMessage e))}))
+    {:ok false :error (str "unknown provider " provider-id)}))
 
 (defn export-tree
   "Build a UI tree, preparing typed booleans and registering callbacks as ids.
@@ -645,7 +678,7 @@
         (when-not defer?
           (reset! callback-hold 0))))))
 
-(defn handle
+(defn- handle-request
   [msg]
   (try
     (let [id (:id msg)
@@ -657,6 +690,7 @@
                                :tree (export-tree)
                                :themes (theme/wire-sets)})
                    "callback" (apply-callback-msg msg)
+                   "provider" (invoke-provider! (:provider-id msg) (:params msg))
                    "directory-picked" (do
                                         (try
                                           (require 'gpui.platform)
@@ -690,6 +724,11 @@
               :id (:id msg)
               :ok false
               :error (str (.getClass e) ": " (.getMessage e))}))))
+
+(defn handle [msg]
+  (if (= "provider" (:op msg))
+    (future (handle-request msg))
+    (handle-request msg)))
 
 (defn- snapshot-mtimes
   []

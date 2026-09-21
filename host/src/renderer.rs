@@ -1,3 +1,9 @@
+#[path = "renderer/parity.rs"]
+mod parity;
+#[path = "renderer/providers.rs"]
+mod providers;
+#[path = "renderer/text_options.rs"]
+mod text_options;
 use crate::action_bridge;
 use crate::catalog;
 use crate::chat;
@@ -153,6 +159,8 @@ struct SliderSlot {
 
 #[derive(Clone)]
 struct SelectOpt {
+    content: Option<Box<Node>>,
+    display_content: Option<Box<Node>>,
     id: SharedString,
     label: SharedString,
     disabled: bool,
@@ -166,6 +174,8 @@ impl From<extra::SelectLeaf> for SelectOpt {
             label: SharedString::from(leaf.label),
             disabled: leaf.disabled,
             display: leaf.display.map(SharedString::from),
+            content: leaf.content,
+            display_content: leaf.display_content,
         }
     }
 }
@@ -178,7 +188,17 @@ impl SelectItem for SelectOpt {
     }
 
     fn display_title(&self) -> Option<AnyElement> {
-        self.display.as_ref().map(|s| s.clone().into_any_element())
+        self.display_content
+            .as_ref()
+            .map(|node| protocol::Content::Node(node.clone()).into_any_element())
+            .or_else(|| self.display.as_ref().map(|s| s.clone().into_any_element()))
+    }
+
+    fn render(&self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        self.content
+            .as_ref()
+            .and_then(|node| embedded_node(node, &format!("option-{}", self.id), Some(cx), None))
+            .unwrap_or_else(|| self.label.clone().into_any_element())
     }
 
     fn value(&self) -> &Self::Value {
@@ -190,9 +210,76 @@ impl SelectItem for SelectOpt {
     }
 }
 
+/// Retain Kit's filtering/selection delegate and add arbitrary section headers.
+struct SectionDelegate<I: SearchableListItem> {
+    inner: SearchableVec<SelectGroup<I>>,
+    groups: Vec<SelectGroup<I>>,
+    headers: Vec<Option<Box<Node>>>,
+    visible: Vec<usize>,
+}
+impl<I: SearchableListItem + 'static> SectionDelegate<I> {
+    fn new(groups: Vec<SelectGroup<I>>, headers: Vec<Option<Box<Node>>>) -> Self {
+        let visible = (0..groups.len()).collect();
+        Self {
+            inner: SearchableVec::new(groups.clone()),
+            groups,
+            headers,
+            visible,
+        }
+    }
+}
+impl<I: SearchableListItem + 'static> SearchableListDelegate for SectionDelegate<I> {
+    type Item = I;
+    fn sections_count(&self, cx: &App) -> usize {
+        self.inner.sections_count(cx)
+    }
+    fn items_count(&self, section: usize) -> usize {
+        self.inner.items_count(section)
+    }
+    fn item(&self, ix: IndexPath) -> Option<&I> {
+        self.inner.item(ix)
+    }
+    fn position<V>(&self, value: &V) -> Option<IndexPath>
+    where
+        I: SearchableListItem<Value = V>,
+        V: PartialEq,
+    {
+        self.inner.position(value)
+    }
+    fn perform_search(&mut self, query: &str, window: &mut Window, cx: &mut App) -> gpui::Task<()> {
+        let lower = query.to_lowercase();
+        self.visible = self
+            .groups
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| {
+                g.title.to_lowercase().contains(&lower) || g.items.iter().any(|i| i.matches(query))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        self.inner.perform_search(query, window, cx)
+    }
+    #[allow(deprecated)]
+    fn section(&self, section: usize) -> Option<AnyElement> {
+        self.inner.section(section)
+    }
+    fn render_section_header(
+        &self,
+        section: usize,
+        _: &mut Window,
+        _: &mut App,
+    ) -> Option<AnyElement> {
+        let index = *self.visible.get(section)?;
+        self.headers
+            .get(index)?
+            .as_ref()
+            .map(|node| protocol::Content::Node(node.clone()).into_any_element())
+    }
+}
+
 enum SelectStateHandle {
     Flat(Entity<SelectState<SearchableVec<SelectOpt>>>),
-    Grouped(Entity<SelectState<SearchableVec<SelectGroup<SelectOpt>>>>),
+    Grouped(Entity<SelectState<SectionDelegate<SelectOpt>>>),
 }
 
 struct SelectSlot {
@@ -205,6 +292,8 @@ struct SelectSlot {
 
 #[derive(Clone)]
 struct ComboOpt {
+    content: Option<Box<Node>>,
+    display_content: Option<Box<Node>>,
     id: SharedString,
     label: SharedString,
     disabled: bool,
@@ -213,6 +302,8 @@ struct ComboOpt {
 impl From<extra::SelectLeaf> for ComboOpt {
     fn from(leaf: extra::SelectLeaf) -> Self {
         Self {
+            content: leaf.content,
+            display_content: leaf.display_content,
             id: SharedString::from(leaf.id),
             label: SharedString::from(leaf.label),
             disabled: leaf.disabled,
@@ -227,6 +318,19 @@ impl SearchableListItem for ComboOpt {
         self.label.clone()
     }
 
+    fn render(&self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        self.content
+            .as_ref()
+            .and_then(|node| embedded_node(node, &format!("option-{}", self.id), Some(cx), None))
+            .unwrap_or_else(|| self.label.clone().into_any_element())
+    }
+
+    fn display_title(&self) -> Option<AnyElement> {
+        self.display_content
+            .clone()
+            .map(|node| protocol::Content::Node(node).into_any_element())
+    }
+
     fn value(&self) -> &Self::Value {
         &self.id
     }
@@ -239,7 +343,7 @@ impl SearchableListItem for ComboOpt {
 #[derive(Clone)]
 enum ComboboxStateHandle {
     Flat(Entity<ComboboxState<SearchableVec<ComboOpt>>>),
-    Grouped(Entity<ComboboxState<SearchableVec<SelectGroup<ComboOpt>>>>),
+    Grouped(Entity<ComboboxState<SectionDelegate<ComboOpt>>>),
 }
 
 struct ComboboxSlot {
@@ -360,10 +464,14 @@ struct DateSlot {
     state: Entity<DatePickerState>,
     range: bool,
     first_day: Weekday,
+    config: String,
     on_change: Option<String>,
 }
 
 struct DockSlot {
+    layout: Option<Value>,
+    native_layout: Option<Value>,
+    options: Option<Value>,
     area: Entity<DockArea>,
     fingerprint: String,
     panels: HashMap<String, Entity<extra::CljPanel>>,
@@ -496,6 +604,8 @@ struct TreeOverlays {
 
 pub struct RootView {
     tree: Option<Rc<Node>>,
+    content_slots: HashMap<String, Node>,
+    mounted_widgets: HashMap<String, String>,
     /// Native titlebar mode is chosen at startup. Retain its geometry when a
     /// later error replaces the application tree with a diagnostic view.
     custom_title_bar: Option<Node>,
@@ -527,6 +637,8 @@ pub struct RootView {
     nav_stacks: HashMap<String, NavStackSlot>,
     resizables: HashMap<String, Entity<ResizableState>>,
     used_resizables: HashSet<String>,
+    render_scroller: Option<overlay::ScrollerPaintContext>,
+    parity: parity::State,
     dialogs: Vec<overlay::DialogSpec>,
     dialog_live: Rc<RefCell<Vec<overlay::DialogSpec>>>,
     dialog_inputs: Rc<RefCell<overlay::OverlayInputs>>,
@@ -567,6 +679,141 @@ pub struct RootView {
     native_window_id: Option<u32>,
 }
 
+/// Lazy child rendering bridges Kit's stored builders/delegates back to the
+/// production renderer. RenderOnce runs during layout, after the owner's Render
+/// borrow has ended. The registry is per window and holds only weak entities.
+#[derive(Default)]
+struct Renderers(HashMap<gpui::WindowId, gpui::WeakEntity<RootView>>);
+impl gpui::Global for Renderers {}
+
+#[derive(IntoElement)]
+struct EmbeddedNode {
+    node: Node,
+    path: String,
+    scroller: Option<overlay::ScrollerPaintContext>,
+    selected: Option<bool>,
+    disabled: bool,
+}
+
+impl gpui::RenderOnce for EmbeddedNode {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let renderer = cx
+            .try_global::<Renderers>()
+            .and_then(|renderers| renderers.0.get(&window.window_handle().window_id()))
+            .cloned();
+        renderer
+            .and_then(|renderer| {
+                renderer
+                    .update(cx, |view, cx| {
+                        let mut node = match &self.node.render_path {
+                            Some(path) => match view.content_slots.get(path) {
+                                Some(node) => node.clone(),
+                                None => return div().into_any_element(),
+                            },
+                            None => self.node,
+                        };
+                        node.disabled |= self.disabled;
+                        if let Some(selected) = self.selected {
+                            node.selected = selected;
+                        }
+                        let previous = std::mem::replace(&mut view.render_scroller, self.scroller);
+                        let result = view.render_node(&node, &self.path, window, cx);
+                        view.render_scroller = previous;
+                        result
+                    })
+                    .ok()
+            })
+            .unwrap_or_else(|| div().into_any_element())
+    }
+}
+
+impl IntoElement for protocol::Content {
+    type Element = AnyElement;
+    fn into_element(self) -> AnyElement {
+        content_element(self, false)
+    }
+}
+
+pub(crate) fn content_element(content: protocol::Content, disabled: bool) -> AnyElement {
+    match content {
+        protocol::Content::Text(text) => text.into_any_element(),
+        protocol::Content::Node(node) => {
+            let path = node
+                .render_path
+                .clone()
+                .unwrap_or_else(|| widget_key(&node, "slot"));
+            EmbeddedNode {
+                node: *node,
+                path,
+                scroller: None,
+                selected: None,
+                disabled,
+            }
+            .into_any_element()
+        }
+    }
+}
+
+#[derive(IntoElement)]
+struct WidgetTrigger {
+    node: Node,
+    path: String,
+}
+impl gpui_component::Selectable for WidgetTrigger {
+    fn selected(mut self, selected: bool) -> Self {
+        self.node.selected = selected;
+        self
+    }
+    fn is_selected(&self) -> bool {
+        self.node.selected
+    }
+}
+impl gpui::RenderOnce for WidgetTrigger {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        EmbeddedNode {
+            selected: Some(self.node.selected),
+            disabled: false,
+            node: self.node,
+            path: self.path,
+            scroller: None,
+        }
+    }
+}
+
+pub(crate) fn window_action_emitter(window: &Window, cx: &App) -> overlay::ActionEmitter {
+    let weak = cx
+        .try_global::<Renderers>()
+        .and_then(|renderers| renderers.0.get(&window.window_handle().window_id()))
+        .cloned();
+    Rc::new(move |action, cx| {
+        if let Some(weak) = &weak {
+            let _ = weak.update(cx, |view, _| {
+                view.callback_queue.push(action);
+                view.flush_callback_queue();
+            });
+        }
+    })
+}
+
+pub(crate) fn embedded_node(
+    node: &Node,
+    path: &str,
+    cx: Option<&App>,
+    scroller: Option<&overlay::ScrollerPaintContext>,
+) -> Option<AnyElement> {
+    cx.and_then(|cx| cx.try_global::<Renderers>())?;
+    Some(
+        EmbeddedNode {
+            node: node.clone(),
+            path: path.to_string(),
+            scroller: scroller.cloned(),
+            selected: None,
+            disabled: false,
+        }
+        .into_any_element(),
+    )
+}
+
 struct RenderPaint<'v, 'w, 'cx, 'a> {
     view: &'v mut RootView,
     window: &'w mut Window,
@@ -589,8 +836,31 @@ impl chat::NodePainter for RenderPaint<'_, '_, '_, '_> {
 
 impl RootView {
     #[cfg(test)]
+    pub(crate) fn test_dock_state(&self, key: &str) -> Option<Entity<DockArea>> {
+        self.docks.get(key).map(|slot| slot.area.clone())
+    }
+
+    #[cfg(test)]
     pub(crate) fn test_editor_state(&self, key: &str) -> Option<Entity<EditorState>> {
         self.editors.get(key).map(|slot| slot.state.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_textarea_state(&self, key: &str) -> Option<Entity<TextareaState>> {
+        self.textareas.get(key).map(|slot| slot.state.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_decoration_ranges(
+        &self,
+        key: &str,
+        cx: &App,
+    ) -> Vec<std::ops::Range<usize>> {
+        self.parity
+            .decorations
+            .get(key)
+            .map(|(_, collection)| collection.get_ranges(cx))
+            .unwrap_or_default()
     }
 
     #[cfg(test)]
@@ -739,6 +1009,13 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        if cx.try_global::<Renderers>().is_none() {
+            cx.set_global(Renderers::default());
+        }
+        let weak = cx.weak_entity();
+        cx.global_mut::<Renderers>()
+            .0
+            .insert(window.window_handle().window_id(), weak);
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             this.apply_theme(window, cx);
             // Always notify: nested nodes may use `:theme :system` even when
@@ -775,7 +1052,19 @@ impl RootView {
                             view.nrepl_port = nrepl_port;
                             view.status = format!("nREPL 127.0.0.1:{nrepl_port} · connected");
                         }
-                        HostEvent::Tree(tree, seq, themes) => {
+                        HostEvent::Tree(mut tree, seq, themes) => {
+                            overlay::scope_content_paths(&mut tree, "root");
+                            view.content_slots.clear();
+                            view.mounted_widgets.clear();
+                            let mut text_flushes = Vec::new();
+                            overlay::walk_nodes(&tree, "root", &mut |node, source_path| {
+                                let key = widget_key(node, source_path);
+                                view.refresh_retained_callbacks(&key, node, &mut text_flushes);
+                                view.mounted_widgets.insert(key, node.kind.clone());
+                                if let Some(path) = &node.render_path {
+                                    view.content_slots.insert(path.clone(), node.clone());
+                                }
+                            });
                             if view.tree.is_none() {
                                 view.custom_title_bar = direct_title_bar(&tree).cloned();
                             } else if view.custom_title_bar.is_some()
@@ -812,6 +1101,9 @@ impl RootView {
                             }
                             view.callback_queue.tree_installed(seq);
                             view.flush_callback_queue();
+                            for (key, kind) in text_flushes {
+                                view.flush_input_change(&key, kind);
+                            }
                             view.error = None;
                             view.status = format!(
                                 "nREPL 127.0.0.1:{} · live · hot reload on",
@@ -864,6 +1156,8 @@ impl RootView {
         }
         Self {
             tree: None,
+            content_slots: HashMap::new(),
+            mounted_widgets: HashMap::new(),
             custom_title_bar: None,
             tree_revision: 0,
             tree_overlays: TreeOverlays::default(),
@@ -891,6 +1185,8 @@ impl RootView {
             nav_stacks: HashMap::new(),
             resizables: HashMap::new(),
             used_resizables: HashSet::new(),
+            render_scroller: None,
+            parity: parity::State::default(),
             dialogs: Vec::new(),
             dialog_live: Rc::new(RefCell::new(Vec::new())),
             dialog_inputs: Rc::new(RefCell::new(HashMap::new())),
@@ -1235,6 +1531,70 @@ impl RootView {
         }
     }
 
+    /// Virtualization may skip a retained entity's render for many exports.
+    /// Its native subscriptions must still use the latest callback registry.
+    fn refresh_retained_callbacks(
+        &mut self,
+        key: &str,
+        node: &Node,
+        text_flushes: &mut Vec<(String, TextFlush)>,
+    ) {
+        fn text_callbacks<S>(slot: &mut TextControlSlot<S>, node: &Node) -> bool {
+            let changed = slot.on_change != node.on_change;
+            slot.on_change = node.on_change.clone();
+            slot.on_submit = node.on_submit.clone();
+            slot.on_blur = node.on_blur.clone();
+            slot.on_escape = node.on_escape.clone();
+            changed && slot.change.on_ids_refreshed()
+        }
+        if let Some(slot) = self.editors.get_mut(key)
+            && text_callbacks(slot, node)
+        {
+            text_flushes.push((key.to_string(), TextFlush::Editor));
+        }
+        if let Some(slot) = self.textareas.get_mut(key)
+            && text_callbacks(slot, node)
+        {
+            text_flushes.push((key.to_string(), TextFlush::Textarea));
+        }
+        if let Some(slot) = self.inputs.get_mut(key) {
+            slot.on_change = node.on_change.clone();
+            slot.on_submit = node.on_submit.clone();
+            slot.on_blur = node.on_blur.clone();
+            slot.on_escape = node.on_escape.clone();
+        }
+        if let Some(slot) = self.selects.get_mut(key) {
+            slot.on_change = node.on_change.clone();
+        }
+        if let Some(slot) = self.comboboxes.get_mut(key) {
+            slot.on_change = node.on_change.clone();
+            slot.on_confirm = node.on_confirm.clone();
+        }
+        if let Some(slot) = self.lists.get_mut(key) {
+            slot.on_change = node.on_change.clone();
+            slot.on_confirm = node.on_confirm.clone();
+        }
+        if let Some(slot) = self.tables.get_mut(key) {
+            slot.on_change = node.on_change.clone();
+            slot.on_confirm = node.on_confirm.clone();
+            slot.on_export = node.on_export.clone();
+        }
+        if let Some(slot) = self.trees.get_mut(key) {
+            slot.on_change = node.on_change.clone();
+        }
+        if let Some(slot) = self.otps.get_mut(key) {
+            slot.on_change = node.on_change.clone();
+            slot.on_blur = node.on_blur.clone();
+        }
+        if let Some(slot) = self.colors.get_mut(key) {
+            slot.on_change = node.on_change.clone();
+        }
+        if let Some(slot) = self.dates.get_mut(key) {
+            slot.on_change = node.on_change.clone();
+        }
+        self.parity.refresh_callbacks(key, node);
+    }
+
     fn schedule_input_change_flush(
         key: String,
         kind: TextFlush,
@@ -1305,6 +1665,18 @@ impl RootView {
     }
 
     fn input_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        let state = self.input_state(key, node, window, cx);
+        self.sync_text_selection(key, node, &state, cx);
+        state
+    }
+
+    fn input_state(
         &mut self,
         key: &str,
         node: &Node,
@@ -1610,7 +1982,7 @@ impl RootView {
             });
             cx.subscribe(
                 &state,
-                move |this, _, event: &SelectEvent<SearchableVec<SelectGroup<SelectOpt>>>, _cx| {
+                move |this, _, event: &SelectEvent<SectionDelegate<SelectOpt>>, _cx| {
                     let SelectEvent::Confirm(value) = event;
                     emit_select_confirm(this, &key_owned, value.as_ref());
                 },
@@ -1672,6 +2044,7 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let path = node.render_path.as_deref().unwrap_or(path);
         let key = widget_key(node, path);
         let scope = resolve_theme(node, window, cx);
         let prev = scope.as_ref().map(|_| Theme::global(cx).clone());
@@ -1745,6 +2118,20 @@ impl RootView {
                 }
                 button = button.children(self.render_children(node, path, window, cx));
                 let mut button = overlay::apply_button_chrome(button, node, Some(cx));
+                if node.on_hover.is_some() {
+                    let emit = Self::action_emitter(cx);
+                    let key = key.clone();
+                    button = button.on_hover(move |hovered, _, cx| {
+                        emit(
+                            overlay::QueuedAction::WidgetValue {
+                                key: key.clone(),
+                                event: "hover".into(),
+                                value: json!(hovered),
+                            },
+                            cx,
+                        )
+                    });
+                }
                 if node.on_click.is_some() {
                     let emit = Self::action_emitter(cx);
                     let key = key.clone();
@@ -1757,7 +2144,11 @@ impl RootView {
             "vstack" => {
                 let mut el = apply_style(v_flex().id(eid(&key)), node, cx)
                     .children(self.render_children(node, path, window, cx));
-                if let Some(callback_id) = node.on_click.clone() {
+                if let Some(click) = self.render_scroller.as_ref().and_then(|context| {
+                    overlay::static_click_handler(node, Some(&self.cmd_tx), Some(context))
+                }) {
+                    el = el.cursor_pointer().on_click(click);
+                } else if let Some(callback_id) = node.on_click.clone().filter(|_| !node.disabled) {
                     el = el.cursor_pointer().on_click(self.click(callback_id));
                 }
                 el.into_any_element()
@@ -1765,7 +2156,11 @@ impl RootView {
             "hstack" => {
                 let mut el = apply_style(h_flex().id(eid(&key)), node, cx)
                     .children(self.render_children(node, path, window, cx));
-                if let Some(callback_id) = node.on_click.clone() {
+                if let Some(click) = self.render_scroller.as_ref().and_then(|context| {
+                    overlay::static_click_handler(node, Some(&self.cmd_tx), Some(context))
+                }) {
+                    el = el.cursor_pointer().on_click(click);
+                } else if let Some(callback_id) = node.on_click.clone().filter(|_| !node.disabled) {
                     el = el.cursor_pointer().on_click(self.click(callback_id));
                 }
                 el.into_any_element()
@@ -1798,12 +2193,41 @@ impl RootView {
                             });
                         });
                     }
-                    apply_style(checkbox, node, cx).into_any_element()
+                    if let Some(callback) = &node.on_change {
+                        let tx = self.cmd_tx.clone();
+                        let callback = callback.clone();
+                        checkbox = checkbox.on_change(move |checked, _, _| {
+                            let _ = tx.send(Cmd::Callback {
+                                id: callback.clone(),
+                                value: Some(json!(checked)),
+                                seq: None,
+                            });
+                        });
+                    }
+                    apply_style(
+                        checkbox.children(self.render_children(node, path, window, cx)),
+                        node,
+                        cx,
+                    )
+                    .into_any_element()
                 }
             }
             "scroll" => self.render_scroll(node, path, &key, window, cx),
             "input" => {
-                let state = self.input_slot(&key, node, window, cx);
+                let dialog = self
+                    .tree_overlays
+                    .dialogs
+                    .iter()
+                    .find(|spec| path.starts_with(&format!("{}/content/", spec.key)))
+                    .map(|spec| spec.key.clone());
+                let input_key = dialog
+                    .as_deref()
+                    .map(|scope| overlay::dialog_input_key(scope, node, path))
+                    .unwrap_or_else(|| key.clone());
+                let state = self.input_slot(&input_key, node, window, cx);
+                if let Some(slot) = self.inputs.get_mut(&input_key) {
+                    slot.in_dialog = dialog.is_some();
+                }
                 apply_style(
                     mapping::apply_input_chrome(Input::new(&state).id(eid(&key)), node),
                     node,
@@ -1821,7 +2245,7 @@ impl RootView {
                 .into_any_element()
             }
             "switch" => self.render_switch(node, &key, cx),
-            "toggle" => self.render_toggle(node, &key, cx),
+            "toggle" => self.render_toggle(node, path, window, &key, cx),
             "toggle-group" => self.render_toggle_group(node, &key, cx),
             "radio-group" => self.render_radio_group(node, &key, cx),
             "slider" => self.render_slider(node, &key, window, cx),
@@ -1832,12 +2256,12 @@ impl RootView {
             "progress-circle" => self.render_progress_circle(node, path, &key, window, cx),
             "separator" => self.render_separator(node, cx),
             "spinner" => self.render_spinner(node, cx),
-            "tag" => self.render_tag(node, cx),
+            "tag" => self.render_tag(node, path, window, cx),
             "alert" => self.render_alert(node, &key, cx),
             "skeleton" => self.render_skeleton(node, cx),
             "shimmer" => self.render_shimmer(node, cx),
             "kbd" => self.render_kbd(node, cx),
-            "link" => self.render_link(node, &key, cx),
+            "link" => self.render_link(node, path, window, &key, cx),
             "group-box" => self.render_group_box(node, path, &key, window, cx),
             "badge" => self.render_badge(node, path, window, cx),
             "tabs" => self.render_tabs(node, &key, cx),
@@ -1918,7 +2342,9 @@ impl RootView {
             ),
             "dock" => self.render_dock(node, &key, window, cx),
             "nav-stack" => self.render_nav_stack(node, &key, window, cx),
-            "nav-page" => overlay::paint_scroller_tree(node, path, &self.cmd_tx, Some(cx)),
+            "nav-page" => apply_style(v_flex(), node, cx)
+                .children(self.render_children(node, path, window, cx))
+                .into_any_element(),
             "resizable" => self.render_resizable(node, path, &key, window, cx),
             "message-scroller" => self.render_message_scroller(node, path, &key, window, cx),
             "message"
@@ -1950,6 +2376,7 @@ impl RootView {
                 node,
                 path,
             ),
+            kind if parity::is_kind(kind) => self.render_parity(node, path, &key, window, cx),
             other => div()
                 .id(eid(&key))
                 .text_color(cx.theme().danger)
@@ -1957,7 +2384,34 @@ impl RootView {
                 .into_any_element(),
         };
 
+        let element = if !node.context_menu.is_empty()
+            && !matches!(
+                node.kind.as_str(),
+                "input" | "textarea" | "editor" | "data-table"
+            ) {
+            let items = node.context_menu.clone();
+            let menu_spec = node.clone();
+            let menu_key = key.clone();
+            let emit = Self::action_emitter(cx);
+            copy_outer_layout(div().id(eid(&format!("{key}-context"))), node)
+                .child(element)
+                .context_menu(move |menu, window, cx| {
+                    overlay::fill_popup_menu(
+                        overlay::configure_popup_menu(menu, &menu_spec),
+                        &items,
+                        &menu_key,
+                        &[],
+                        emit.clone(),
+                        window,
+                        cx,
+                    )
+                })
+                .into_any_element()
+        } else {
+            element
+        };
         let element = with_tooltip(element, node, &key);
+        let element = overlay::wrap_scroller_follow(element, node, self.render_scroller.as_ref());
 
         if let Some(prev) = prev {
             *Theme::global_mut(cx) = prev;
@@ -1971,6 +2425,13 @@ impl RootView {
     fn render_switch(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
         let checked = node.checked.unwrap_or(false);
         let mut el = Switch::new(eid(key)).checked(checked);
+        if let Some(color) = node
+            .checked_color
+            .as_deref()
+            .and_then(extra::parse_hex_color)
+        {
+            el = el.color(color);
+        }
         if let Some(text) = node.text.clone() {
             el = el.label(text);
         }
@@ -1988,7 +2449,14 @@ impl RootView {
         apply_style(el, node, cx).into_any_element()
     }
 
-    fn render_toggle(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+    fn render_toggle(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        key: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let checked = node.checked.unwrap_or(false);
         let mut el = Toggle::new(eid(key)).checked(checked);
         if let Some(icon) = mapping::icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref())
@@ -2009,7 +2477,12 @@ impl RootView {
                 });
             });
         }
-        apply_style(el, node, cx).into_any_element()
+        apply_style(
+            el.children(self.render_children(node, path, window, cx)),
+            node,
+            cx,
+        )
+        .into_any_element()
     }
 
     fn render_toggle_group(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
@@ -2046,6 +2519,12 @@ impl RootView {
                 }
                 if item.disabled {
                     toggle = toggle.disabled(true);
+                }
+                if let Some(content) = &item.content {
+                    toggle = toggle.child(protocol::Content::Node(content.clone()));
+                }
+                for child in &item.children {
+                    toggle = toggle.child(protocol::Content::Node(Box::new(child.clone())));
                 }
                 toggle
             }));
@@ -2087,7 +2566,16 @@ impl RootView {
             .selected_index(selected_index)
             .disabled(node.disabled)
             .children(items.iter().map(|item| {
-                Radio::new(SharedString::from(item.id_or_label())).label(item.label_or_id())
+                let mut radio = Radio::new(SharedString::from(item.id_or_label()))
+                    .label(item.label_or_id())
+                    .disabled(item.disabled);
+                if let Some(content) = &item.content {
+                    radio = radio.child(protocol::Content::Node(content.clone()));
+                }
+                for child in &item.children {
+                    radio = radio.child(protocol::Content::Node(Box::new(child.clone())));
+                }
+                radio
             }));
         if let Some(callback_id) = node.on_change.clone() {
             let ids: Vec<String> = items.iter().map(Item::id_or_label).collect();
@@ -2299,14 +2787,26 @@ impl RootView {
         )
     }
 
-    fn render_tag(&self, node: &Node, cx: &App) -> AnyElement {
+    fn render_tag(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let mut tag = Tag::new().with_variant(mapping::parse_tag_variant(node.variant.as_deref()));
         if node.outline {
             tag = tag.outline();
         }
         tag = tag.with_size(mapping::parse_scale(node.control_size.as_deref()));
         let label = node.text.clone().unwrap_or_default();
-        apply_style(tag.child(label), node, cx).into_any_element()
+        apply_style(
+            tag.child(label)
+                .children(self.render_children(node, path, window, cx)),
+            node,
+            cx,
+        )
+        .into_any_element()
     }
 
     fn render_alert(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
@@ -2350,7 +2850,14 @@ impl RootView {
         }
     }
 
-    fn render_link(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+    fn render_link(
+        &mut self,
+        node: &Node,
+        path: &str,
+        window: &mut Window,
+        key: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let mut link = Link::new(eid(key));
         if let Some(href) = node.href.clone().filter(|s| !s.is_empty()) {
             link = link.href(href);
@@ -2365,7 +2872,13 @@ impl RootView {
             .text
             .clone()
             .unwrap_or_else(|| node.href.clone().unwrap_or_default());
-        apply_style(link.child(label), node, cx).into_any_element()
+        apply_style(
+            link.child(label)
+                .children(self.render_children(node, path, window, cx)),
+            node,
+            cx,
+        )
+        .into_any_element()
     }
 
     fn render_group_box(
@@ -2381,6 +2894,12 @@ impl RootView {
             .with_variant(mapping::parse_group_variant(node.variant.as_deref()));
         if let Some(title) = node.title.clone() {
             box_ = box_.title(title);
+        }
+        if let Some(style) = &node.title_style {
+            box_ = box_.title_style(mapping::apply_styled(div(), style).style().clone());
+        }
+        if let Some(style) = &node.content_style {
+            box_ = box_.content_style(mapping::apply_styled(div(), style).style().clone());
         }
         apply_style(box_, node, cx)
             .children(self.render_children(node, path, window, cx))
@@ -2415,7 +2934,27 @@ impl RootView {
             .with_variant(mapping::parse_tab_variant(node.variant.as_deref()))
             .with_size(mapping::parse_scale(node.control_size.as_deref()))
             .selected_index(selected_index)
-            .children(items.iter().map(|item| Tab::from(item.label_or_id())));
+            .children(items.iter().map(|item| {
+                let mut tab = Tab::from(item.label_or_id()).disabled(item.disabled);
+                if let Some(icon) =
+                    mapping::icon_from_parts(item.icon.as_deref(), item.icon_svg.as_deref())
+                {
+                    tab = tab.icon(icon);
+                }
+                if let Some(content) = &item.content {
+                    tab = tab.child(protocol::Content::Node(content.clone()));
+                }
+                for child in &item.children {
+                    tab = tab.child(protocol::Content::Node(Box::new(child.clone())));
+                }
+                tab
+            }));
+        if let Some(prefix) = &node.prefix {
+            bar = bar.prefix(prefix.clone());
+        }
+        if let Some(suffix) = &node.suffix {
+            bar = bar.suffix(suffix.clone());
+        }
         if node.menu.unwrap_or(false) {
             bar = bar.menu(true);
         }
@@ -2806,6 +3345,12 @@ impl RootView {
             .disabled(node.disabled);
         for item in items {
             let mut step = StepperItem::new().child(item.label_or_id());
+            if let Some(content) = &item.content {
+                step = step.child(protocol::Content::Node(content.clone()));
+            }
+            for child in &item.children {
+                step = step.child(protocol::Content::Node(Box::new(child.clone())));
+            }
             if item.disabled {
                 step = step.disabled(true);
             }
@@ -2838,8 +3383,31 @@ impl RootView {
             .as_deref()
             .or(node.text.as_deref())
             .unwrap_or("check");
-        let icon = mapping::icon_from_parts(Some(name), node.icon_svg.as_deref())
+        let mut icon = mapping::icon_from_parts(Some(name), node.icon_svg.as_deref())
             .unwrap_or_else(|| Icon::new(IconName::Asterisk));
+        if let Some(path) = &node.src {
+            icon = icon.path(path.clone());
+        }
+        if let Some(transform) = &node.icon_transform {
+            let pair = |key: &str| {
+                transform
+                    .get(key)
+                    .and_then(Value::as_array)
+                    .filter(|v| v.len() == 2)
+                    .and_then(|v| Some((v[0].as_f64()? as f32, v[1].as_f64()? as f32)))
+            };
+            let mut native = gpui::Transformation::default();
+            if let Some((x, y)) = pair("scale") {
+                native = native.with_scaling(gpui::size(x, y));
+            }
+            if let Some((x, y)) = pair("translate") {
+                native = native.with_translation(gpui::point(px(x), px(y)));
+            }
+            if let Some(rotate) = transform.get("rotate").and_then(Value::as_f64) {
+                native = native.with_rotation(gpui::radians(rotate as f32));
+            }
+            icon = icon.transform(native);
+        }
         apply_style(
             icon.with_size(mapping::parse_scale(node.control_size.as_deref())),
             node,
@@ -2850,6 +3418,9 @@ impl RootView {
 
     fn render_clipboard(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
         let mut clip = Clipboard::new(eid(key)).value(node.text.clone().unwrap_or_default());
+        if let Some(tooltip) = mapping::kit_tooltip(node) {
+            clip = clip.tooltip(tooltip.clone());
+        }
         if let Some(callback_id) = node.on_copied.clone() {
             let cmd_tx = self.cmd_tx.clone();
             clip = clip.on_copied(move |value, _, _| {
@@ -2975,6 +3546,20 @@ impl RootView {
                 if let Some(icon) = icon {
                     acc = acc.icon(icon);
                 }
+                if let Some(style) = &item.title_style {
+                    acc = acc.title_style(mapping::apply_styled(div(), style).style().clone());
+                }
+                if let Some(style) = &item.content_style {
+                    acc = acc.content_style(mapping::apply_styled(div(), style).style().clone());
+                }
+                if let Some(style) = item.hover_style.clone() {
+                    acc = acc.hover(move |style_refinement| {
+                        let mut style_refinement = style_refinement.clone();
+                        style_refinement
+                            .refine(&mapping::apply_styled(div(), &style).style().clone());
+                        style_refinement
+                    });
+                }
                 acc
             });
         }
@@ -3017,7 +3602,20 @@ impl RootView {
                 .clone()
                 .or_else(|| item.id.clone())
                 .unwrap_or_default();
-            let value = item.text.clone().unwrap_or_default();
+            if item.separator {
+                list = list.separator();
+                continue;
+            }
+            let label = item
+                .display_content
+                .as_ref()
+                .map(|node| protocol::Content::Node(node.clone()).into_any_element())
+                .unwrap_or_else(|| label.into_any_element());
+            let value = item
+                .content
+                .as_ref()
+                .map(|node| protocol::Content::Node(node.clone()).into_any_element())
+                .unwrap_or_else(|| item.text.clone().unwrap_or_default().into_any_element());
             list = list.item(label, value, mapping::parse_span(item.span));
         }
         content_sized(list, node, cx)
@@ -3030,17 +3628,37 @@ impl RootView {
         let content_path = format!("{key}/content");
         let mut popover = Popover::new(eid(key))
             .open(open)
-            .trigger(overlay::trigger_button(
-                node.trigger.as_deref(),
-                key,
-                Some(cx),
-            ))
+            .trigger(WidgetTrigger {
+                node: node.trigger.as_deref().cloned().unwrap_or_else(|| Node {
+                    kind: "button".into(),
+                    text: Some("Open".into()),
+                    ..Node::default()
+                }),
+                path: format!("{key}-trigger"),
+            })
             .content({
                 let emit = emit.clone();
                 move |_, _, cx| {
                     overlay::paint_static(&content, emit.clone(), &content_path, Some(cx))
                 }
             });
+        if let Some(anchor) = mapping::parse_anchor(node.placement.as_deref()) {
+            popover = popover.anchor(anchor);
+        }
+        if let Some(appearance) = node.appearance {
+            popover = popover.appearance(appearance);
+        }
+        if let Some(closable) = node.overlay_closable {
+            popover = popover.overlay_closable(closable);
+        }
+        if let Some(style) = &node.trigger_style {
+            popover = popover.trigger_style(mapping::apply_styled(div(), style).style().clone());
+        }
+        match node.mouse_button.as_deref() {
+            Some("right") => popover = popover.mouse_button(gpui::MouseButton::Right),
+            Some("middle") => popover = popover.mouse_button(gpui::MouseButton::Middle),
+            _ => {}
+        }
         if node.on_open_change.is_some() {
             let key = key.to_string();
             popover = popover.on_open_change(move |open, _, cx| {
@@ -3066,6 +3684,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let items = node.items.clone();
+        let menu_spec = node.clone();
         let emit = Self::action_emitter(cx);
         let key = key.to_string();
         let button = apply_style(
@@ -3074,9 +3693,20 @@ impl RootView {
             cx,
         );
         button
-            .dropdown_menu(move |menu, window, cx| {
-                overlay::fill_popup_menu(menu, &items, &key, &[], emit.clone(), window, cx)
-            })
+            .dropdown_menu_with_anchor(
+                mapping::parse_anchor(node.placement.as_deref()).unwrap_or(gpui::Anchor::TopLeft),
+                move |menu, window, cx| {
+                    overlay::fill_popup_menu(
+                        overlay::configure_popup_menu(menu, &menu_spec),
+                        &items,
+                        &key,
+                        &[],
+                        emit.clone(),
+                        window,
+                        cx,
+                    )
+                },
+            )
             .into_any_element()
     }
 
@@ -3089,6 +3719,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let items = node.items.clone();
+        let menu_spec = node.clone();
         let emit = Self::action_emitter(cx);
         let key = key.to_string();
         let mut dropdown =
@@ -3123,7 +3754,7 @@ impl RootView {
         dropdown = if let Some(anchor) = mapping::parse_anchor(node.placement.as_deref()) {
             dropdown.dropdown_menu_with_anchor(anchor, move |menu, window, cx| {
                 overlay::fill_popup_menu(
-                    menu,
+                    overlay::configure_popup_menu(menu, &menu_spec),
                     &items,
                     &menu_key,
                     &[],
@@ -3135,7 +3766,7 @@ impl RootView {
         } else {
             dropdown.dropdown_menu(move |menu, window, cx| {
                 overlay::fill_popup_menu(
-                    menu,
+                    overlay::configure_popup_menu(menu, &menu_spec),
                     &items,
                     &menu_key,
                     &[],
@@ -3157,6 +3788,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let items = node.items.clone();
+        let menu_spec = node.clone();
         let emit = Self::action_emitter(cx);
         let key = key.to_string();
         // Flex column, not a block `div`. A `:flex 1` list/table/tree skips
@@ -3169,7 +3801,15 @@ impl RootView {
             el = el.flex_1().min_w_0().min_h_0();
         }
         el.context_menu(move |menu, window, cx| {
-            overlay::fill_popup_menu(menu, &items, &key, &[], emit.clone(), window, cx)
+            overlay::fill_popup_menu(
+                overlay::configure_popup_menu(menu, &menu_spec),
+                &items,
+                &key,
+                &[],
+                emit.clone(),
+                window,
+                cx,
+            )
         })
         .children(self.render_children(node, path, window, cx))
         .into_any_element()
@@ -3330,6 +3970,16 @@ impl RootView {
         if let Some(empty) = node.empty.clone().filter(|s| !s.is_empty()) {
             command = command.empty(move |_, _, _| empty.clone());
         }
+        if let Some(header) = node.header.clone() {
+            let path = format!("{key}-header");
+            command = command
+                .header(move |_, _, cx| embedded_node(&header, &path, Some(cx), None).unwrap());
+        }
+        if let Some(footer) = node.footer.clone() {
+            let path = format!("{key}-footer");
+            command = command
+                .footer(move |_, _, cx| embedded_node(&footer, &path, Some(cx), None).unwrap());
+        }
         if let Some(h) = node.menu_max_h.filter(|h| *h > 0.0) {
             command = command.max_h(px(h));
         }
@@ -3428,6 +4078,19 @@ impl RootView {
         // an owned AnyElement so the later sync can borrow them again.
         let element = command.render(window, cx).into_any_element();
         self.sync_command_state(key, node, window, cx);
+        self.parity.used.insert(key.to_string());
+        let count = self.commands[key].state.read(cx).matched_count();
+        if node.on_matched_count.is_some()
+            && self.parity.counts.insert(key.to_string(), count) != Some(count)
+        {
+            self.callback_queue
+                .push(overlay::QueuedAction::WidgetValue {
+                    key: key.to_string(),
+                    event: "matched-count".into(),
+                    value: json!(count),
+                });
+            self.flush_callback_queue();
+        }
         element
     }
 
@@ -3459,6 +4122,20 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let state = self.list_slot(key, node, window, cx);
+        self.parity.used.insert(key.to_string());
+        if let Some(query) = &node.query {
+            let desired = Value::String(query.clone());
+            if self.parity.searches.get(key) != Some(&desired) {
+                state.update(cx, |list, cx| {
+                    list.delegate_mut().suppress_query = true;
+                    list.set_query(query, window, cx);
+                    list.delegate_mut().suppress_query = false;
+                });
+                self.parity.searches.insert(key.to_string(), desired);
+            }
+        } else {
+            self.parity.searches.remove(key);
+        }
         viewport_sized(
             mapping::apply_list_chrome(List::new(&state), node),
             node,
@@ -3475,7 +4152,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> Entity<ListState<RowListDelegate>> {
         self.used_lists.insert(key.to_string());
-        let items = rows::rows_from_items(node.collection());
+        let items = rows::list_rows_from_items(node.collection());
         let fingerprint = rows::rows_fingerprint(node.collection());
         let searchable = node.searchable;
         let selectable = node.selectable.or(node.row_selectable).unwrap_or(true);
@@ -3511,11 +4188,13 @@ impl RootView {
                     collection_changed,
                 );
             });
+            state.update(cx, |list, _| list.delegate_mut().sync_rendering(node));
             sync_list_selection(&state, selected.as_deref(), window, cx);
             return state;
         }
 
-        let delegate = RowListDelegate::new(items).with_host(self.cmd_tx.clone());
+        let mut delegate = RowListDelegate::new(items).with_host(self.cmd_tx.clone());
+        delegate.sync_rendering(node);
         let state = cx.new(|cx| {
             ListState::new(delegate, window, cx)
                 .searchable(searchable)
@@ -3573,6 +4252,65 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let state = self.table_slot(key, node, window, cx);
+        state.update(cx, |table, _| table.delegate_mut().sync_rendering(node));
+        self.parity.used.insert(key.to_string());
+        let request = json!([
+            node.scroll_to_row,
+            node.scroll_to_column,
+            node.scroll_generation
+        ]);
+        if node.scroll_to_row.is_none() && node.scroll_to_column.is_none() {
+            self.parity.requests.remove(key);
+        }
+        if (node.scroll_to_row.is_some() || node.scroll_to_column.is_some())
+            && self.parity.requests.get(key) != Some(&request)
+        {
+            let mut applied = true;
+            state.update(cx, |table, cx| {
+                if let Some(target) = &node.scroll_to_row {
+                    let row = target
+                        .as_str()
+                        .and_then(|id| table.delegate().rows.iter().position(|r| r.id == id))
+                        .or_else(|| target.as_u64().map(|n| n as usize));
+                    if let Some(row) = row.filter(|i| *i < table.delegate().rows.len()) {
+                        table.scroll_to_row(row, cx);
+                    } else {
+                        applied = false;
+                    }
+                }
+                if let Some(target) = &node.scroll_to_column {
+                    let col = target
+                        .as_str()
+                        .and_then(|id| {
+                            table
+                                .delegate()
+                                .columns
+                                .iter()
+                                .position(|c| c.key.as_ref() == id)
+                        })
+                        .or_else(|| target.as_u64().map(|n| n as usize));
+                    if let Some(col) = col.filter(|i| *i < table.delegate().columns.len()) {
+                        table.scroll_to_col(col, cx);
+                    } else {
+                        applied = false;
+                    }
+                }
+            });
+            if applied {
+                self.parity.requests.insert(key.to_string(), request);
+            }
+        }
+
+        if node.loading
+            && let Some(content) = &node.loading_content
+        {
+            return viewport_sized(
+                embedded_node(content, &format!("{key}-loading-content"), Some(cx), None).unwrap(),
+                node,
+                240.,
+                cx,
+            );
+        }
         viewport_sized(
             mapping::apply_data_table_chrome(
                 DataTable::new(&state).with_size(mapping::table_row_size(node)),
@@ -3935,6 +4673,16 @@ impl RootView {
         let state = self.tree_slot(key, node, window, cx);
         let on_change = node.on_change.clone();
         let cmd_tx = self.cmd_tx.clone();
+        fn content_map(items: &[Item], result: &mut HashMap<String, Box<Node>>) {
+            for item in items {
+                if let Some(content) = &item.content {
+                    result.insert(item.id_or_label(), content.clone());
+                }
+                content_map(&item.items, result);
+            }
+        }
+        let mut contents = HashMap::new();
+        content_map(node.collection(), &mut contents);
         let view = tree(&state, move |ix, entry, selected, _, _| {
             let id = entry.item().id.to_string();
             let label = entry.item().label.clone();
@@ -3942,7 +4690,14 @@ impl RootView {
             let on_change = on_change.clone();
             gpui_component::list::ListItem::new(ix)
                 .selected(selected)
-                .child(div().pl(px(16. * entry.depth() as f32)).child(label))
+                .child(
+                    div().pl(px(16. * entry.depth() as f32)).child(
+                        contents
+                            .get(&id)
+                            .map(|node| protocol::Content::Node(node.clone()).into_any_element())
+                            .unwrap_or_else(|| label.into_any_element()),
+                    ),
+                )
                 .on_click(move |_, _, _| {
                     if let Some(callback_id) = on_change.clone() {
                         let _ = cmd_tx.send(Cmd::Callback {
@@ -4233,6 +4988,9 @@ impl RootView {
                 slot.on_click = spec.node.on_click.clone();
                 slot.on_close = spec.node.on_close.clone();
                 if slot.fingerprint == fingerprint {
+                    if spec.node.content.is_some() || spec.node.action.is_some() {
+                        slot.entity.update(cx, |_, cx| cx.notify());
+                    }
                     continue;
                 }
                 slot.fingerprint = fingerprint.clone();
@@ -4302,6 +5060,55 @@ impl RootView {
         note = note
             .id1::<CljNotification>(SharedString::from(key.clone()))
             .autohide(overlay::notification_autohide(&spec.node));
+        if let Some(content) = spec.node.content.clone() {
+            let path = format!("{key}-content");
+            note = note
+                .content(move |_, _, cx| embedded_node(&content, &path, Some(cx), None).unwrap());
+        }
+        if let Some(action) = spec.node.action.clone() {
+            let root = cx.weak_entity();
+            note = note.action(move |_, _, cx| {
+                let live = root
+                    .read_with(cx, |root, _| {
+                        action
+                            .render_path
+                            .as_ref()
+                            .and_then(|path| root.content_slots.get(path))
+                            .cloned()
+                    })
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| *action.clone());
+                let mut button = overlay::apply_button_chrome(
+                    Button::new("notification-action"),
+                    &live,
+                    Some(cx),
+                );
+                if let Some(text) = &live.text {
+                    button = button.label(text.clone());
+                }
+                if let Some(callback) = live.on_click.clone() {
+                    let root = root.clone();
+                    button = button.on_click(move |_, _, cx| {
+                        let _ = root.update(cx, |view, _| {
+                            protocol::send_callbacks(
+                                &view.cmd_tx,
+                                vec![protocol::CallbackCall::fire(callback.clone())],
+                            );
+                        });
+                    });
+                }
+                for child in &live.children {
+                    button = button.child(protocol::Content::Node(Box::new(child.clone())));
+                }
+                button
+            });
+        }
+        match spec.node.delivery.as_deref() {
+            Some("system") => note = note.system(),
+            Some("in-app-and-system") => note = note.in_app_and_system(),
+            _ => {}
+        }
         let on_click = spec.node.on_click.clone();
         if on_click.is_some() {
             let cmd_key = key.clone();
@@ -4634,6 +5441,32 @@ impl RootView {
         if node.disabled {
             picker = picker.disabled(true);
         }
+        if !node.presets.is_empty() {
+            picker = picker.presets(
+                node.presets
+                    .iter()
+                    .filter_map(|item| {
+                        let date = extra::date_from_value(&item.value, node.range || node.multiple);
+                        match (date.start(), date.end()) {
+                            (Some(start), Some(end)) if !date.is_single() => {
+                                Some(gpui_component::date_picker::DateRangePreset::range(
+                                    item.label_or_id(),
+                                    start,
+                                    end,
+                                ))
+                            }
+                            (Some(date), _) => {
+                                Some(gpui_component::date_picker::DateRangePreset::single(
+                                    item.label_or_id(),
+                                    date,
+                                ))
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect(),
+            );
+        }
         picker = picker.number_of_months(mapping::date_number_of_months(node));
         picker = picker.appearance(node.appearance.unwrap_or(true));
         if let Some(enabled) = node.focus_ring {
@@ -4658,10 +5491,14 @@ impl RootView {
         let range = node.range || node.multiple;
         let first_day = mapping::parse_first_day_of_week(node.first_day_of_week.as_ref());
         let wanted = extra::date_from_value(&node.value, range);
+        let config = format!(
+            "{:?}/{:?}/{:?}",
+            node.date_format, node.year_range, node.disabled_dates
+        );
         if let Some(slot) = self.dates.get_mut(key) {
             slot.on_change = node.on_change.clone();
             let state = slot.state.clone();
-            if slot.range == range && slot.first_day == first_day {
+            if slot.range == range && slot.first_day == first_day && slot.config == config {
                 let current = state.read(cx).date();
                 if current != wanted {
                     state.update(cx, |picker, cx| picker.set_date(wanted, window, cx));
@@ -4675,7 +5512,26 @@ impl RootView {
             } else {
                 DatePickerState::new(window, cx)
             };
-            picker = picker.date_format("%Y-%m-%d").first_day_of_week(first_day);
+            picker = picker
+                .date_format(
+                    node.date_format
+                        .clone()
+                        .unwrap_or_else(|| "%Y-%m-%d".into()),
+                )
+                .first_day_of_week(first_day);
+            if !node.disabled_dates.is_empty() {
+                let dates: Vec<_> = node
+                    .disabled_dates
+                    .iter()
+                    .filter_map(|date| extra::parse_iso_date(date))
+                    .collect();
+                picker = picker.disabled_matcher(gpui_component::calendar::Matcher::custom(
+                    move |date| dates.contains(date),
+                ));
+            }
+            if let Some([min, max]) = node.year_range {
+                picker.set_year_range((min, max), cx);
+            }
             picker
         });
         state.update(cx, |picker, cx| picker.set_date(wanted, window, cx));
@@ -4693,6 +5549,7 @@ impl RootView {
                 state: state.clone(),
                 range,
                 first_day,
+                config,
                 on_change: node.on_change.clone(),
             },
         );
@@ -4707,6 +5564,8 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let state = self.editor_slot(key, node, window, cx);
+        self.sync_text_search(key, node, &state, window, cx);
+        self.sync_editor_providers(key, node, &state, cx);
         // Code editor Input is multi-line but `h_auto` without an explicit
         // height collapses to a single row. Fill the viewport wrapper.
         viewport_sized(
@@ -4718,6 +5577,18 @@ impl RootView {
     }
 
     fn editor_slot(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<EditorState> {
+        let state = self.editor_state(key, node, window, cx);
+        self.sync_editor_options(key, node, &state, window, cx);
+        state
+    }
+
+    fn editor_state(
         &mut self,
         key: &str,
         node: &Node,
@@ -4792,6 +5663,7 @@ impl RootView {
                 change: protocol::InputChangeCoalesce::default(),
             },
         );
+        self.observe_text_search(key, &state, cx);
         let key_owned = key.to_string();
         cx.subscribe_in(
             &state,
@@ -4831,6 +5703,19 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<TextareaState> {
+        let state = self.textarea_state(key, node, window, cx);
+        self.sync_textarea_options(key, node, &state, window, cx);
+        self.sync_text_search(key, node, &state, window, cx);
+        state
+    }
+
+    fn textarea_state(
+        &mut self,
+        key: &str,
+        node: &Node,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextareaState> {
         self.used_textareas.insert(key.to_string());
         let wanted = node.text.clone().unwrap_or_default();
         let rows = node.rows.unwrap_or(3).max(1) as usize;
@@ -4856,13 +5741,13 @@ impl RootView {
             if force {
                 slot.wait_for_seq = None;
             }
-            if let Some(placeholder) = node.placeholder.clone() {
-                state.update(cx, |input, cx| {
-                    input.set_placeholder(placeholder, window, cx);
-                });
-            }
             state.update(cx, |input, cx| {
-                input.set_rows(rows, cx);
+                input.set_placeholder(node.placeholder.clone().unwrap_or_default(), window, cx);
+            });
+            state.update(cx, |input, cx| {
+                if node.auto_grow.is_none() {
+                    input.set_rows(rows, cx);
+                }
                 input.set_submit_on_enter(submit_on_enter, cx);
             });
             if node.focus && !state.read(cx).focus_handle(cx).is_focused(window) {
@@ -4901,6 +5786,7 @@ impl RootView {
                 change: protocol::InputChangeCoalesce::default(),
             },
         );
+        self.observe_text_search(key, &state, cx);
         let key_owned = key.to_string();
         cx.subscribe_in(
             &state,
@@ -5368,51 +6254,85 @@ impl RootView {
     }
 
     fn render_sidebar(&self, node: &Node, key: &str, cx: &App) -> AnyElement {
+        if !node.children.is_empty() {
+            let sidebar = sidebar_root::<parity::SidebarEntry>(node, key).children(
+                node.children
+                    .iter()
+                    .map(|child| parity::SidebarEntry(child.clone())),
+            );
+            return viewport_sized(sidebar, node, 280.0, cx);
+        }
         let collapsed = node.collapsed;
         let selected = node.string_value();
         let cmd_tx = self.cmd_tx.clone();
         let on_change = node.on_change.clone();
-        let items: Vec<SidebarMenuItem> = node
+        let items = node
             .collection()
             .iter()
             .map(|item| {
-                let id = item.id_or_label();
-                let mut row = SidebarMenuItem::new(item.label_or_id())
-                    .active(selected.as_deref() == Some(id.as_str()))
-                    .collapsed(collapsed)
-                    .disable(item.disabled);
-                if let Some(style) = item.style.as_deref() {
-                    row = mapping::apply_styled(row, style);
-                }
-                if let Some(style) = mapping::style_refinement(item.label_style.as_deref()) {
-                    row = row.label_style(style);
-                }
-                if let Some(icon) =
-                    mapping::icon_from_parts(item.icon.as_deref(), item.icon_svg.as_deref())
-                {
-                    row = row.icon(icon);
-                }
-                let cmd_tx = cmd_tx.clone();
-                let on_change = on_change.clone();
-                if item.disabled {
-                    row
-                } else {
-                    row.on_click(move |_, _, _| {
-                        if let Some(callback) = on_change.clone() {
-                            protocol::send_callbacks(
-                                &cmd_tx,
-                                vec![protocol::CallbackCall::with_value(
-                                    callback,
-                                    json!(id.clone()),
-                                )],
-                            );
-                        }
-                    })
-                }
+                self.sidebar_item(
+                    item,
+                    collapsed,
+                    selected.as_deref(),
+                    on_change.clone(),
+                    &cmd_tx,
+                )
             })
-            .collect();
-        let sidebar = sidebar_root(node, key).child(SidebarMenu::new().children(items));
+            .collect::<Vec<_>>();
+        let sidebar =
+            sidebar_root::<SidebarMenu>(node, key).child(SidebarMenu::new().children(items));
         viewport_sized(sidebar, node, 280.0, cx)
+    }
+
+    fn sidebar_item(
+        &self,
+        item: &Item,
+        collapsed: bool,
+        selected: Option<&str>,
+        on_change: Option<String>,
+        tx: &mpsc::Sender<Cmd>,
+    ) -> SidebarMenuItem {
+        let id = item.id_or_label();
+        let mut row = SidebarMenuItem::new(item.label_or_id())
+            .active(selected == Some(id.as_str()))
+            .collapsed(collapsed)
+            .disable(item.disabled)
+            .default_open(item.default_open.unwrap_or(item.expanded))
+            .click_to_open(item.click_to_open.unwrap_or(false))
+            .click_to_toggle(item.click_to_toggle.unwrap_or(false));
+        if let Some(style) = item.style.as_deref() {
+            row = mapping::apply_styled(row, style);
+        }
+        if let Some(style) = mapping::style_refinement(item.label_style.as_deref()) {
+            row = row.label_style(style);
+        }
+        if let Some(icon) = mapping::icon_from_parts(item.icon.as_deref(), item.icon_svg.as_deref())
+        {
+            row = row.icon(icon);
+        }
+        if let Some(suffix) = item.suffix.clone() {
+            row = row.suffix(move |_, _| suffix.clone());
+        }
+        row = row.children(
+            item.items
+                .iter()
+                .map(|item| self.sidebar_item(item, collapsed, selected, on_change.clone(), tx)),
+        );
+        let tx = tx.clone();
+        let click = item.on_click.clone();
+        row.on_click(move |_, _, _| {
+            let mut calls = Vec::new();
+            if let Some(callback) = &click {
+                calls.push(protocol::CallbackCall::fire(callback.clone()));
+            }
+            if let Some(callback) = &on_change {
+                calls.push(protocol::CallbackCall::with_value(
+                    callback.clone(),
+                    json!(id),
+                ));
+            }
+            protocol::send_callbacks(&tx, calls);
+        })
     }
 
     fn render_dock(
@@ -5446,10 +6366,33 @@ impl RootView {
                         });
                     panel.update(cx, |p, cx| {
                         p.title = item.label_or_id().into();
+                        p.spec = item.clone();
                         *p.live.borrow_mut() = content;
                         cx.notify();
                     });
                 }
+            }
+            if let Some(panel) = node
+                .string_value()
+                .as_ref()
+                .and_then(|id| slot.panels.get(id))
+            {
+                let id = gpui::base::dock::PanelId::from(panel.entity_id());
+                slot.area
+                    .update(cx, |dock, cx| dock.select_panel(id, window, cx));
+            }
+            let layout_changed = slot.layout != node.dock_layout;
+            if layout_changed {
+                if let Some(layout) = &node.dock_layout
+                    && slot.native_layout.as_ref() != Some(layout)
+                {
+                    load_dock_layout(&slot.area, &slot.panels, layout, window, cx);
+                }
+                slot.layout = node.dock_layout.clone();
+            }
+            if layout_changed || slot.options != node.dock_options {
+                sync_dock_options(&slot.area, node.dock_options.as_ref(), window, cx);
+                slot.options = node.dock_options.clone();
             }
             return viewport_sized(slot.area.clone(), node, 360.0, cx);
         }
@@ -5473,8 +6416,17 @@ impl RootView {
             let path = format!("{key}/panel/{ix}");
             let title = item.label_or_id();
             let emit = Self::action_emitter(cx);
-            let panel = cx
-                .new(|cx| extra::CljPanel::new(title.clone(), live, path, emit, cx.focus_handle()));
+            let panel = cx.new(|cx| {
+                extra::CljPanel::new(
+                    key.to_string(),
+                    item.clone(),
+                    title.clone(),
+                    live,
+                    path,
+                    emit,
+                    cx.focus_handle(),
+                )
+            });
             let side = extra::dock_side(item);
             by_side
                 .entry(side)
@@ -5512,9 +6464,43 @@ impl RootView {
                 dock.set_dock_size(DockPlacement::Bottom, px(bottom_h), window, cx);
             }
         });
+        if let Some(panel) = node.string_value().as_ref().and_then(|id| panels.get(id)) {
+            let id = gpui::base::dock::PanelId::from(panel.entity_id());
+            area.update(cx, |dock, cx| dock.select_panel(id, window, cx));
+        }
+        if let Some(layout) = &node.dock_layout {
+            load_dock_layout(&area, &panels, layout, window, cx);
+        }
+        sync_dock_options(&area, node.dock_options.as_ref(), window, cx);
+        let emit = Self::action_emitter(cx);
+        let dock_key = key.to_string();
+        cx.subscribe(&area, move |this, area, event, cx| {
+            if matches!(event, gpui::base::dock::DockEvent::LayoutChanged) {
+                let value = serde_json::to_value(area.read(cx).dump(cx)).unwrap_or(Value::Null);
+                // A Clojure callback may persist and echo this exact layout.
+                // Treat that echo as acknowledgement rather than loading it again.
+                if let Some(slot) = this.docks.get_mut(&dock_key) {
+                    if slot.native_layout.as_ref() == Some(&value) {
+                        return;
+                    }
+                    slot.native_layout = Some(value.clone());
+                }
+                let action = overlay::QueuedAction::WidgetValue {
+                    key: dock_key.clone(),
+                    event: "layout-change".into(),
+                    value,
+                };
+                let emit = emit.clone();
+                cx.defer(move |cx| emit(action, cx));
+            }
+        })
+        .detach();
         self.docks.insert(
             key.to_string(),
             DockSlot {
+                layout: node.dock_layout.clone(),
+                native_layout: None,
+                options: node.dock_options.clone(),
                 area: area.clone(),
                 fingerprint,
                 panels,
@@ -6007,9 +6993,162 @@ impl RootView {
 
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.parity.prune(&self.mounted_widgets);
         self.apply_theme(window, cx);
         self.apply_chrome(window);
         self.native_window_id = preview::native_window_id(window);
+        // Virtualization and collapsed native surfaces may skip painting mounted
+        // children. Retain initialized controls by tree membership as well as the
+        // previous frame, without eagerly creating offscreen entities.
+        let used = std::mem::take(&mut self.used_inputs);
+        self.inputs.retain(|key, _| {
+            used.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("input" | "number-input")
+                )
+        });
+        // SliderState stores the last laid-out bar size. Dropping it on tab
+        // switch recreates an entity whose bounds are 0, so the fill paints
+        // at 100% until the mouse moves. Bounds are crate-private, so slots
+        // stay for the window lifetime (see docs/gpui-component.md).
+        let used_selects = std::mem::take(&mut self.used_selects);
+        self.selects.retain(|key, _| {
+            used_selects.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("select")
+                )
+        });
+        let used_comboboxes = std::mem::take(&mut self.used_comboboxes);
+        self.comboboxes.retain(|key, _| {
+            used_comboboxes.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("combobox")
+                )
+        });
+        let used_commands = std::mem::take(&mut self.used_commands);
+        self.commands.retain(|key, _| {
+            used_commands.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("command")
+                )
+        });
+        let used_lists = std::mem::take(&mut self.used_lists);
+        self.lists.retain(|key, _| {
+            used_lists.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("list")
+                )
+        });
+        let used_tables = std::mem::take(&mut self.used_tables);
+        self.tables.retain(|key, _| {
+            used_tables.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("data-table")
+                )
+        });
+        let used_trees = std::mem::take(&mut self.used_trees);
+        self.trees.retain(|key, _| {
+            used_trees.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("tree")
+                )
+        });
+        let used_otps = std::mem::take(&mut self.used_otps);
+        self.otps.retain(|key, _| {
+            used_otps.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("otp-input")
+                )
+        });
+        let used_colors = std::mem::take(&mut self.used_colors);
+        self.colors.retain(|key, _| {
+            used_colors.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("color-picker")
+                )
+        });
+        let used_dates = std::mem::take(&mut self.used_dates);
+        self.dates.retain(|key, _| {
+            used_dates.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("date-picker")
+                )
+        });
+        let used_editors = std::mem::take(&mut self.used_editors);
+        self.editors.retain(|key, _| {
+            used_editors.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("editor")
+                )
+        });
+        let used_textareas = std::mem::take(&mut self.used_textareas);
+        self.textareas.retain(|key, _| {
+            used_textareas.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("textarea")
+                )
+        });
+        let used_vlists = std::mem::take(&mut self.used_vlists);
+        self.vlists.retain(|key, _| {
+            used_vlists.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("virtual-list")
+                )
+        });
+        let used_scrollers = std::mem::take(&mut self.used_scrollers);
+        self.scrollers.retain(|key, _| {
+            used_scrollers.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("message-scroller")
+                )
+        });
+        let used_virtual_scrolls = std::mem::take(&mut self.used_virtual_scrolls);
+        self.virtual_scrolls.retain(|key, _| {
+            used_virtual_scrolls.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("virtual-scroll")
+                )
+        });
+        let used_docks = std::mem::take(&mut self.used_docks);
+        self.docks.retain(|key, _| {
+            used_docks.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("dock")
+                )
+        });
+        let used_nav_stacks = std::mem::take(&mut self.used_nav_stacks);
+        self.nav_stacks.retain(|key, _| {
+            used_nav_stacks.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("nav-stack")
+                )
+        });
+        let used_resizables = std::mem::take(&mut self.used_resizables);
+        self.resizables.retain(|key, _| {
+            used_resizables.contains(key)
+                || matches!(
+                    self.mounted_widgets.get(key).map(String::as_str),
+                    Some("resizable")
+                )
+        });
+
         self.used_inputs.clear();
         self.used_selects.clear();
         self.used_comboboxes.clear();
@@ -6072,50 +7211,6 @@ impl Render for RootView {
         // Overlay builders cannot borrow RootView while it is rendering. Keep
         // input entities and live callbacks ready before painting the layers.
         self.sync_dialog_inputs(window, cx);
-        let used = std::mem::take(&mut self.used_inputs);
-        self.inputs.retain(|key, _| used.contains(key));
-        // SliderState stores the last laid-out bar size. Dropping it on tab
-        // switch recreates an entity whose bounds are 0, so the fill paints
-        // at 100% until the mouse moves. Bounds are crate-private, so slots
-        // stay for the window lifetime (see docs/gpui-component.md).
-        let used_selects = std::mem::take(&mut self.used_selects);
-        self.selects.retain(|key, _| used_selects.contains(key));
-        let used_comboboxes = std::mem::take(&mut self.used_comboboxes);
-        self.comboboxes
-            .retain(|key, _| used_comboboxes.contains(key));
-        let used_commands = std::mem::take(&mut self.used_commands);
-        self.commands.retain(|key, _| used_commands.contains(key));
-        let used_lists = std::mem::take(&mut self.used_lists);
-        self.lists.retain(|key, _| used_lists.contains(key));
-        let used_tables = std::mem::take(&mut self.used_tables);
-        self.tables.retain(|key, _| used_tables.contains(key));
-        let used_trees = std::mem::take(&mut self.used_trees);
-        self.trees.retain(|key, _| used_trees.contains(key));
-        let used_otps = std::mem::take(&mut self.used_otps);
-        self.otps.retain(|key, _| used_otps.contains(key));
-        let used_colors = std::mem::take(&mut self.used_colors);
-        self.colors.retain(|key, _| used_colors.contains(key));
-        let used_dates = std::mem::take(&mut self.used_dates);
-        self.dates.retain(|key, _| used_dates.contains(key));
-        let used_editors = std::mem::take(&mut self.used_editors);
-        self.editors.retain(|key, _| used_editors.contains(key));
-        let used_textareas = std::mem::take(&mut self.used_textareas);
-        self.textareas.retain(|key, _| used_textareas.contains(key));
-        let used_vlists = std::mem::take(&mut self.used_vlists);
-        self.vlists.retain(|key, _| used_vlists.contains(key));
-        let used_scrollers = std::mem::take(&mut self.used_scrollers);
-        self.scrollers.retain(|key, _| used_scrollers.contains(key));
-        let used_virtual_scrolls = std::mem::take(&mut self.used_virtual_scrolls);
-        self.virtual_scrolls
-            .retain(|key, _| used_virtual_scrolls.contains(key));
-        let used_docks = std::mem::take(&mut self.used_docks);
-        self.docks.retain(|key, _| used_docks.contains(key));
-        let used_nav_stacks = std::mem::take(&mut self.used_nav_stacks);
-        self.nav_stacks
-            .retain(|key, _| used_nav_stacks.contains(key));
-        let used_resizables = std::mem::take(&mut self.used_resizables);
-        self.resizables
-            .retain(|key, _| used_resizables.contains(key));
 
         self.sync_dialogs(window, cx);
         self.sync_sheet(window, cx);
@@ -6370,16 +7465,14 @@ fn select_flat_vec(node: &Node) -> SearchableVec<SelectOpt> {
     )
 }
 
-fn select_group_vec(node: &Node) -> SearchableVec<SelectGroup<SelectOpt>> {
-    SearchableVec::new(
-        extra::select_sections(node.collection())
-            .into_iter()
-            .map(|section| {
-                SelectGroup::new(section.title)
-                    .items(section.items.into_iter().map(SelectOpt::from))
-            })
-            .collect::<Vec<_>>(),
-    )
+fn select_group_vec(node: &Node) -> SectionDelegate<SelectOpt> {
+    let sections = extra::select_sections(node.collection());
+    let headers = sections.iter().map(|s| s.header.clone()).collect();
+    let groups = sections
+        .into_iter()
+        .map(|s| SelectGroup::new(s.title).items(s.items.into_iter().map(SelectOpt::from)))
+        .collect();
+    SectionDelegate::new(groups, headers)
 }
 
 fn apply_select_controlled_value<D>(
@@ -6473,15 +7566,14 @@ fn combo_flat_vec(node: &Node) -> SearchableVec<ComboOpt> {
     )
 }
 
-fn combo_group_vec(node: &Node) -> SearchableVec<SelectGroup<ComboOpt>> {
-    SearchableVec::new(
-        extra::select_sections(node.collection())
-            .into_iter()
-            .map(|section| {
-                SelectGroup::new(section.title).items(section.items.into_iter().map(ComboOpt::from))
-            })
-            .collect::<Vec<_>>(),
-    )
+fn combo_group_vec(node: &Node) -> SectionDelegate<ComboOpt> {
+    let sections = extra::select_sections(node.collection());
+    let headers = sections.iter().map(|s| s.header.clone()).collect();
+    let groups = sections
+        .into_iter()
+        .map(|s| SelectGroup::new(s.title).items(s.items.into_iter().map(ComboOpt::from)))
+        .collect();
+    SectionDelegate::new(groups, headers)
 }
 
 fn apply_combobox_selected_values<D>(
@@ -6599,6 +7691,16 @@ where
     }
     if let Some(name) = node.check_icon.as_deref().and_then(mapping::parse_icon) {
         combo = combo.check_icon(Icon::new(name));
+    }
+    if let Some(trigger) = node.trigger.clone() {
+        combo = combo.render_trigger(move |_, _, cx| {
+            embedded_node(&trigger, "combobox-trigger", Some(cx), None).unwrap()
+        });
+    }
+    if let Some(footer) = node.footer.clone() {
+        combo = combo.footer(move |_, cx| {
+            embedded_node(&footer, "combobox-footer", Some(cx), None).unwrap()
+        });
     }
     if let Some(empty) = node.empty.clone().filter(|s| !s.is_empty()) {
         combo = combo.empty(move |_, _| empty.clone());
@@ -6781,7 +7883,10 @@ fn select_selected_index(
     })
 }
 
-fn sidebar_root(node: &Node, key: &str) -> Sidebar<SidebarMenu> {
+fn sidebar_root<E: gpui_component::sidebar::SidebarItem + 'static>(
+    node: &Node,
+    key: &str,
+) -> Sidebar<E> {
     let mut sidebar = Sidebar::new(key.to_string())
         // The wrapper owns Clojure width/size/flex. Kit defaults to a fixed
         // 255px width, which otherwise clips rows and its scrollbar when the
@@ -6794,6 +7899,12 @@ fn sidebar_root(node: &Node, key: &str) -> Sidebar<SidebarMenu> {
         ));
     if let Some(title) = sidebar_header_title(node) {
         sidebar = sidebar.header(div().px_2().py_1().child(title));
+    }
+    if let Some(header) = &node.header {
+        sidebar = sidebar.header(protocol::Content::Node(header.clone()));
+    }
+    if let Some(footer) = &node.footer {
+        sidebar = sidebar.footer(protocol::Content::Node(footer.clone()));
     }
     sidebar
 }
@@ -7440,24 +8551,39 @@ fn message_scroller_style_split(node: &Node) -> (ViewportWrap, bool) {
 }
 
 fn with_tooltip(el: AnyElement, node: &Node, key: &str) -> AnyElement {
-    let Some(text) = node.tooltip.clone().filter(|s| !s.is_empty()) else {
+    let content = node.tooltip_content.clone();
+    let text = node.tooltip.clone().filter(|s| !s.is_empty());
+    let key_binding = node
+        .tooltip_key
+        .as_deref()
+        .and_then(mapping::parse_keystroke)
+        .map(Kbd::new);
+    if content.is_none() && text.is_none() {
         return el;
-    };
-    // Button / Switch / Kit Checkbox / Toggle use native Kit `.tooltip()`.
-    // Circle checkbox is a clj-gpui extra and still uses the generic wrapper.
-    if matches!(node.kind.as_str(), "button" | "switch" | "toggle")
-        || (node.kind == "checkbox" && node.shape.as_deref() != Some("circle"))
+    }
+    // Plain control tooltips keep the control's native placement behavior.
+    if content.is_none()
+        && key_binding.is_none()
+        && (matches!(
+            node.kind.as_str(),
+            "button" | "switch" | "toggle" | "radio" | "clipboard" | "input-group-button"
+        ) || (node.kind == "checkbox" && node.shape.as_deref() != Some("circle")))
     {
         return el;
     }
     copy_outer_layout(div().id(eid(&format!("{key}-tip"))), node)
-        .tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+        .tooltip(move |window, cx| {
+            let tooltip = if let Some(content) = content.clone() {
+                Tooltip::element(move |_, _| protocol::Content::Node(content.clone()))
+            } else {
+                Tooltip::new(text.clone().unwrap_or_default())
+            };
+            tooltip.key_binding(key_binding.clone()).build(window, cx)
+        })
         .child(el)
         .into_any_element()
 }
 
-/// Kit `Styled` refinements: gap, padding, type, colors, alignment,
-/// wrap/clip. Not box geometry (`:width` / `:height` / `:size` / `:flex`).
 fn apply_kit_visual_style<E: Styled>(el: E, node: &Node, cx: &App) -> E {
     let mut el = mapping::apply_visual_style(el, node);
     if node_theme_pref(node).is_some() {
@@ -7636,6 +8762,95 @@ impl Element for ThemeScope {
             self.child.paint(window, cx);
         });
     }
+}
+
+fn sync_dock_options(
+    area: &Entity<DockArea>,
+    options: Option<&Value>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    area.update(cx, |area, cx| {
+        let locked = options
+            .and_then(|o| o.get("locked"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        area.set_locked(locked, window, cx);
+        for (name, placement) in [
+            ("left", DockPlacement::Left),
+            ("right", DockPlacement::Right),
+            ("bottom", DockPlacement::Bottom),
+        ] {
+            let config = options.and_then(|o| o.get(name));
+            area.set_dock_collapsible(
+                placement,
+                config
+                    .and_then(|o| o.get("collapsible"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+                window,
+                cx,
+            );
+            if let Some(size) = config
+                .and_then(|o| o.get("size"))
+                .and_then(Value::as_f64)
+                .filter(|s| s.is_finite() && *s > 0.)
+            {
+                area.set_dock_size(placement, px(size as f32), window, cx);
+            }
+            if let Some(open) = config.and_then(|o| o.get("open")).and_then(Value::as_bool)
+                && area.is_dock_open(placement) != open
+            {
+                area.toggle_dock(placement, window, cx);
+            }
+        }
+    });
+}
+
+fn load_dock_layout(
+    area: &Entity<DockArea>,
+    panels: &HashMap<String, Entity<extra::CljPanel>>,
+    value: &Value,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    use gpui::base::dock::{DockAreaState, PanelInfo, PanelState};
+    let Ok(state) = serde_json::from_value::<DockAreaState>(value.clone()) else {
+        return;
+    };
+    fn valid(state: &PanelState, panels: &HashMap<String, Entity<extra::CljPanel>>) -> bool {
+        (state.panel_name != "clj-gpui-panel"
+            || match &state.info {
+                PanelInfo::Panel(info) => info
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| panels.contains_key(id)),
+                _ => false,
+            })
+            && state.children.iter().all(|child| valid(child, panels))
+    }
+    if !valid(&state.center, panels)
+        || [&state.left_dock, &state.right_dock, &state.bottom_dock]
+            .into_iter()
+            .flatten()
+            .any(|dock| !valid(dock.panel(), panels))
+    {
+        return;
+    }
+    let weak: HashMap<_, _> = panels
+        .iter()
+        .map(|(id, panel)| (id.clone(), panel.downgrade()))
+        .collect();
+    gpui::base::dock::register_panel(cx, "clj-gpui-panel", move |context, _, _| {
+        let PanelInfo::Panel(info) = context.info() else {
+            unreachable!("validated panel state")
+        };
+        let panel = weak[info["id"].as_str().unwrap()]
+            .upgrade()
+            .expect("panels retained during synchronous load");
+        gpui_component::dock::panel_handle(panel)
+    });
+    let _ = area.update(cx, |area, cx| area.load(state, window, cx));
 }
 
 fn eid(path: &str) -> SharedString {
@@ -8064,6 +9279,8 @@ mod select_control_tests {
 
     fn opt(id: &str, label: &str) -> SelectOpt {
         SelectOpt {
+            content: None,
+            display_content: None,
             id: SharedString::from(id.to_string()),
             label: SharedString::from(label.to_string()),
             disabled: false,
@@ -8573,7 +9790,8 @@ mod widget_wrap_tests {
                 flex: Some(1.0),
                 ..Node::default()
             };
-            let mut sidebar = sidebar_root(&node, "sidebar-width");
+            let mut sidebar =
+                sidebar_root::<gpui_kit::component::sidebar::SidebarMenu>(&node, "sidebar-width");
             let mut full = div().w_full();
             assert_eq!(
                 sidebar.style().size.width,

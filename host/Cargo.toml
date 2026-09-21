@@ -27,6 +27,7 @@ gpui-fps = "0.6.4"
 # Direct alias for the already-transitive matching GPUI snapshot. Remote
 # Avatar `:src` (and other `img` URIs) never load on NullHttpClient.
 reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.5" }
+lsp-types = "0.97"
 image = { version = "0.25", default-features = false, features = ["png"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }

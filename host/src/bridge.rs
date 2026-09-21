@@ -45,9 +45,12 @@ fn rpc(
     let (tx, rx) = mpsc::channel();
     pending.lock().unwrap().insert(id, tx);
     request["id"] = json!(id);
-    write_json(stream, &request)?;
-    rx.recv_timeout(Duration::from_secs(30))
-        .context("timed out waiting for Clojure to answer")
+    let result = write_json(stream, &request).and_then(|_| {
+        rx.recv_timeout(Duration::from_secs(30))
+            .context("timed out waiting for Clojure to answer")
+    });
+    pending.lock().unwrap().remove(&id);
+    result
 }
 
 fn parse_tree(value: &Value) -> Result<(Node, Vec<gpui_component::theme::ThemeSet>)> {
@@ -305,6 +308,33 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                 while let Ok(cmd) = cmd_rx.recv() {
                     match cmd {
                         Cmd::Shutdown => break,
+                        Cmd::Provider {
+                            id,
+                            params,
+                            response,
+                        } => {
+                            if response.is_closed() {
+                                continue;
+                            }
+                            let writer = writer.clone();
+                            let pending = pending.clone();
+                            let next_id = next_id.clone();
+                            // Provider requests must never block editing or ordinary callbacks.
+                            thread::spawn(move || {
+                                let result = rpc(
+                                    &writer,
+                                    &pending,
+                                    &next_id,
+                                    json!({"op":"provider", "provider-id":id, "params":params}),
+                                )
+                                .and_then(|reply| match callback_failed(&reply) {
+                                    Some(error) => Err(anyhow::anyhow!(error)),
+                                    None => Ok(reply.get("value").cloned().unwrap_or(Value::Null)),
+                                })
+                                .map_err(|error| error.to_string());
+                                let _ = response.send_blocking(result);
+                            });
+                        }
                         Cmd::DirectoryPicked {
                             request_id,
                             path,
@@ -340,6 +370,7 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                         }
                         other => match other {
                             Cmd::Shutdown
+                            | Cmd::Provider { .. }
                             | Cmd::DirectoryPicked { .. }
                             | Cmd::PreviewCaptured { .. } => {
                                 unreachable!()
@@ -425,6 +456,37 @@ pub fn protocol_test() -> Result<()> {
         bail!("tree did not contain initial count: {tree:?}");
     }
 
+    let mut hover_provider = None;
+    crate::overlay::walk_nodes(&tree, "root", &mut |node, _| {
+        if node.id.as_deref() == Some("provider-test") {
+            hover_provider = node
+                .lsp
+                .as_ref()
+                .and_then(|lsp| lsp.get("hover"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+    });
+    let hover_provider = hover_provider.context("missing test editor provider")?;
+    let request_provider = |await_count: Option<u64>| -> Result<_> {
+        let (response, receiver) = async_channel::bounded(1);
+        host.cmd_tx.send(Cmd::Provider {
+            id: hover_provider.clone(),
+            params: json!({"text":"hello","offset":5,"await-count":await_count}),
+            response,
+        })?;
+        Ok(receiver)
+    };
+    let initial = request_provider(None)?
+        .recv_blocking()?
+        .map_err(anyhow::Error::msg)?;
+    if initial["contents"]["value"] != "hello:0" {
+        bail!("unexpected initial provider result: {initial}");
+    }
+    // The provider waits for the button mutation. A blocking reader or command
+    // worker would deadlock here instead of delivering the callback below.
+    let waiting_provider = request_provider(Some(1))?;
+
     let plus = tree
         .find_button("+")
         .and_then(|node| node.on_click.clone())
@@ -454,6 +516,21 @@ pub fn protocol_test() -> Result<()> {
         bail!("atom did not update after Clojure callback: {updated:?}");
     }
     println!("[host] atom updated and tree rerendered (Count: 1)");
+    let waited = waiting_provider
+        .recv_blocking()?
+        .map_err(anyhow::Error::msg)?;
+    if waited["contents"]["value"] != "hello:1" {
+        bail!("provider did not observe callback: {waited}");
+    }
+    let fresh = request_provider(None)?
+        .recv_blocking()?
+        .map_err(anyhow::Error::msg)?;
+    if fresh["contents"]["value"] != "hello:1" {
+        bail!("provider id retained a stale function: {fresh}");
+    }
+    println!(
+        "[host] asynchronous providers use current Clojure functions without blocking callbacks"
+    );
 
     host.cmd_tx.send(Cmd::Reload)?;
     let started = Instant::now();

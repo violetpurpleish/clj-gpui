@@ -224,6 +224,13 @@ fn command_item(item: &Item, slot: &str, item_path: Vec<String>) -> CommandItem 
     if !item.keywords.is_empty() {
         cmd = cmd.keywords(item.keywords.clone());
     }
+    if let Some(content) = item.content.clone() {
+        cmd = cmd.child(move |_, _| crate::protocol::Content::Node(content.clone()));
+    }
+    for child in &item.children {
+        let child = child.clone();
+        cmd = cmd.child(move |_, _| crate::protocol::Content::Node(Box::new(child.clone())));
+    }
     cmd.action(CljAction::new(slot, item_path).boxed())
 }
 

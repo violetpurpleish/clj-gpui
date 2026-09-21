@@ -2135,3 +2135,68 @@
     (is (zero? @gen1) "stale id must not run the prior handler")
     (is (= {:ok true :id id-2} (runtime/invoke-callback! id-2)))
     (is (= 1 @gen2) "current id still runs the new handler")))
+
+(deftest rich-widget-slots-export-live-callbacks
+  (runtime/reset-callbacks!)
+  (let [seen (atom [])
+        action (fn [tag] (ui/button (name tag) #(swap! seen conj tag)))
+        tree (ui/vstack
+              (ui/input "" {:prefix (action :prefix) :suffix (action :suffix)})
+              (ui/select :a {:options [{:id :group :header (action :header)
+                                        :items [{:id :a :label "A"
+                                                 :content (action :row)
+                                                 :display (action :display)}]}]
+                             :empty (action :empty)})
+              (ui/list [{:id :group :header (action :list-header)
+                         :items [{:id :item :label "Item" :content (action :list-row)}]}]
+                       {:on-change #(swap! seen conj %)})
+              (ui/settings [{:id :page :resettable true :suffix (action :page-suffix)
+                             :items [{:id :custom :content (action :setting)
+                                      :dirty true :on-reset #(swap! seen conj :reset)}]}])
+              (ui/form (ui/field {:label-content (action :field-label)
+                                  :description (action :description)}
+                                 (ui/input-group (ui/input "")
+                                                 (ui/input-group-addon (action :addon))))))
+        exported (runtime/export-tree tree)
+        paths [[0 :prefix :on-click] [0 :suffix :on-click]
+               [1 :options 0 :header :on-click]
+               [1 :options 0 :items 0 :content :on-click]
+               [1 :options 0 :items 0 :display-content :on-click]
+               [1 :empty :on-click] [2 :items 0 :header :on-click]
+               [2 :items 0 :items 0 :content :on-click]
+               [3 :items 0 :suffix :on-click]
+               [3 :items 0 :items 0 :content :on-click]
+               [3 :items 0 :items 0 :on-reset]
+               [4 :children 0 :label-content :on-click]
+               [4 :children 0 :description :on-click]
+               [4 :children 0 :children 0 :children 1 :children 0 :on-click]]]
+    (doseq [path paths]
+      (let [callback (get-in (:children exported) path)]
+        (is (string? callback) (str path))
+        (is (:ok (runtime/invoke-callback! callback)) (str path))))
+    (is (= [:prefix :suffix :header :row :display :empty :list-header
+            :list-row :page-suffix :setting :reset :field-label :description :addon]
+           @seen))
+    (runtime/invoke-callback! (get-in exported [:children 2 :on-change]) "item")
+    (is (= :item (last @seen)))))
+
+(deftest markdown-replacement-recipes-and-app-menu-export-callbacks
+  (let [seen (atom [])
+        tree (ui/vstack
+              (ui/markdown "[status](widget)"
+                           {:extensions (fn [source]
+                                          [{:id :status :variant :inline :source source
+                                            :source-range [0 16] :baseline 14
+                                            :content (ui/button "Ready" #(swap! seen conj :ready))}])})
+              (ui/app-menu-bar [{:id :file :label "File"
+                                 :items [{:id :new :label "New"}]}]
+                               {:on-change #(swap! seen conj %)})
+              (ui/list [] {:initial-content (ui/button "Start" #(swap! seen conj :start))}))
+        wire (runtime/export-tree tree)]
+    (is (= "app-menu-bar" (get-in wire [:children 1 :type])))
+    (is (= [0 16] (get-in wire [:children 0 :items 0 :source-range])))
+    (is (= "inline" (get-in wire [:children 0 :items 0 :variant])))
+    (runtime/invoke-callback! (get-in wire [:children 0 :items 0 :content :on-click]))
+    (runtime/invoke-callback! (get-in wire [:children 1 :on-change]) ["file" "new"])
+    (runtime/invoke-callback! (get-in wire [:children 2 :initial-content :on-click]))
+    (is (= [:ready [:file :new] :start] @seen))))

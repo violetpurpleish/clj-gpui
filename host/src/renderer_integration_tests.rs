@@ -2463,10 +2463,8 @@ async fn dialog_job_cancel_keeps_its_identity_when_an_earlier_job_finishes(
     event_tx.send(HostEvent::RenderRequested).await.unwrap();
     cx.run_until_parked();
     drain(&cmd_rx);
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.click("jobs/content/1/2", cx)
-    })
-    .unwrap();
+    cx.update_window(handle.into(), |_, window, cx| window.click("cancel-b", cx))
+        .unwrap();
     cx.run_until_parked();
     assert!(callback_pairs(&drain(&cmd_rx)).is_empty());
     // A completes while the click waits for the updated callback registry.
@@ -2729,4 +2727,738 @@ async fn production_nested_menu_emits_leaf_then_parent_callback(cx: &mut TestApp
             ("menu-change".into(), Some(json!(["file", "export"])))
         ]
     );
+}
+
+#[gpui_kit::test]
+async fn nested_surfaces_mount_and_retain_production_widgets(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        syntax::init(cx);
+    });
+    // These containers previously erased stateful children in a static painter.
+    for surface in [
+        "dialog",
+        "sheet",
+        "dock",
+        "nav-stack",
+        "data-table",
+        "virtual-scroll",
+        "message-scroller",
+    ] {
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let (event_tx, event_rx) = async_channel::unbounded();
+        let handle = cx.open_window(size(px(900.), px(800.)), |window, cx| {
+            let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+            Root::new(view, window, cx)
+        });
+        let children = json!({"type": "vstack", "id": "nested-body", "width": 380, "height": 260, "children": [
+            {"type": "editor", "id": "nested-editor", "text": "hello", "height": 70},
+            {"type": "list", "id": "nested-list", "items": [{"id": "one", "label": "One"}], "height": 60},
+            {"type": "button", "id": "nested-action", "text": "Action", "on-click": "old"}
+        ]});
+        let container = match surface {
+            "dialog" | "sheet" => {
+                json!({"type": surface, "id": "surface", "open": true, "width": 500, "children": [children]})
+            }
+            "dock" => {
+                json!({"type": "dock", "id": "surface", "height": 500, "items": [{"id": "panel", "label": "Panel", "content": children}]})
+            }
+            "nav-stack" => {
+                json!({"type": "nav-stack", "id": "surface", "height": 500, "children": [{"type": "nav-page", "id": "page", "children": [children]}]})
+            }
+            "data-table" => {
+                json!({"type": "data-table", "id": "surface", "height": 500, "row-height": 300, "options": [{"id": "body", "label": "Body", "width": 440}], "items": [{"id": "row", "cells": [children]}]})
+            }
+            _ => {
+                json!({"type": surface, "id": "surface", "height": 500, "row-height": 280, "children": [children]})
+            }
+        };
+        let tree: Node = serde_json::from_value(
+            json!({"type": "window", "chrome": "app", "children": [container]}),
+        )
+        .unwrap();
+        event_tx
+            .send(HostEvent::tree(tree.clone(), None, vec![]))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        let view = production_view(handle, cx);
+        let before = view.read_with(cx, |view, _| {
+            view.test_editor_state("nested-editor")
+                .map(|state| state.entity_id())
+        });
+        assert!(
+            before.is_some(),
+            "{surface} must use the production editor renderer"
+        );
+        assert!(
+            view.read_with(cx, |view, cx| view
+                .test_list_state("nested-list", cx)
+                .is_some()),
+            "{surface} must mount a real list"
+        );
+        event_tx
+            .send(HostEvent::tree(tree, None, vec![]))
+            .await
+            .unwrap();
+        paint_root(handle, cx);
+        assert_eq!(
+            before,
+            view.read_with(cx, |view, _| view
+                .test_editor_state("nested-editor")
+                .map(|state| state.entity_id())),
+            "{surface} must retain the editor across trees"
+        );
+        drain(&cmd_rx);
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.click("nested-action", cx)
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            callback_pairs(&drain(&cmd_rx)),
+            vec![("old".into(), None)],
+            "{surface} child must remain interactive"
+        );
+        cx.update_window(handle.into(), |_, window, _| window.remove_window())
+            .unwrap();
+    }
+}
+
+#[gpui_kit::test]
+async fn new_kit_families_mount_real_controls_and_keep_live_slot_callbacks(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        syntax::init(cx);
+    });
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(1000.), px(900.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let tree = |callback: &str| {
+        serde_json::from_value(json!({"type":"window", "chrome":"app", "children":[
+        {"type":"input-group", "id":"group", "children":[
+            {"type":"input", "id":"group-input", "text":"search"},
+            {"type":"input-group-addon", "align":"inline-end", "children":[
+                {"type":"input-group-button", "id":"group-action", "text":"Go", "on-click":callback}
+            ]}
+        ]},
+        {"type":"form", "columns":2, "children":[
+            {"type":"field", "title":"Name", "required":true, "children":[{"type":"input","id":"form-input","text":"Jane"}]},
+            {"type":"field", "title":"Notes", "children":[{"type":"editor","id":"form-editor","text":"hello","height":50}]}
+        ]},
+        {"type":"empty", "children":[
+            {"type":"empty-header", "children":[{"type":"empty-title","children":[{"type":"label","text":"Nothing yet"}]}]},
+            {"type":"empty-content", "children":[{"type":"button","id":"empty-action","text":"Create","on-click":callback}]}
+        ]},
+        {"type":"collapsible", "open":true, "content":{"type":"input","text":"Anonymous","on-change":callback}},
+        {"type":"list", "id":"custom-list", "height":75, "items":[{"id":"one","label":"One","content":{"type":"button","id":"row-action","text":"Row action","on-click":callback}}]},
+        {"type":"select", "id":"custom-select", "value":"one", "options":[{"id":"one","label":"One", "display-content":{"type":"button","id":"display-action","text":"Display action","on-click":callback}}]},
+        {"type":"carousel", "id":"slides", "height":100, "value":0, "children":[
+            {"type":"carousel-content", "children":[{"type":"carousel-item", "children":[{"type":"input", "id":"slide-input", "text":"slide"}]}]},
+            {"type":"carousel-previous"}, {"type":"carousel-next"},
+            {"type":"carousel-pagination", "children":[{"type":"carousel-pagination-item","value":0}]}
+        ]}
+    ]})).unwrap()
+    };
+    event_tx
+        .send(HostEvent::tree(tree("old"), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let view = production_view(handle, cx);
+    let anonymous_before = view.read_with(cx, |view, _| {
+        for key in ["group-input", "form-input", "slide-input", "root-3-content"] {
+            assert!(
+                view.test_input_state_id(key).is_some(),
+                "{key} should be a native input"
+            );
+        }
+        assert!(view.test_editor_state("form-editor").is_some());
+        view.test_input_state_id("root-3-content")
+    });
+    event_tx
+        .send(HostEvent::tree(tree("new"), None, vec![]))
+        .await
+        .unwrap();
+    paint_root(handle, cx);
+    assert_eq!(
+        anonymous_before,
+        view.read_with(cx, |view, _| view.test_input_state_id("root-3-content"))
+    );
+    for action in [
+        "group-action",
+        "empty-action",
+        "row-action",
+        "display-action",
+    ] {
+        drain(&cmd_rx);
+        cx.update_window(handle.into(), |_, window, cx| window.click(action, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let commands = drain(&cmd_rx);
+        let calls = callback_pairs(&commands);
+        assert!(
+            calls.contains(&("new".into(), None)),
+            "{action} must use the latest callback, got {calls:?}"
+        );
+        event_tx
+            .send(HostEvent::tree(
+                tree("new"),
+                callback_sequence(&commands),
+                vec![],
+            ))
+            .await
+            .unwrap();
+        paint_root(handle, cx);
+    }
+}
+
+#[gpui_kit::test]
+async fn calendar_controlled_changes_do_not_echo_and_date_disabling_updates(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(700.), px(600.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    for value in ["2026-09-01", "2026-09-02"] {
+        let tree = serde_json::from_value(json!({"type":"window", "children":[{"type":"calendar", "id":"calendar", "value":value,"on-change":"selected", "year-range":[2025,2027],"disabled-dates":["2026-09-10"]}]})).unwrap();
+        event_tx
+            .send(HostEvent::tree(tree, None, vec![]))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        assert!(
+            callback_pairs(&drain(&cmd_rx)).is_empty(),
+            "controlled dates must not echo"
+        );
+    }
+}
+
+#[gpui_kit::test]
+async fn editor_search_requests_preserve_identity_and_apply_actions_once(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(700.), px(500.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let tree = |search: serde_json::Value| {
+        serde_json::from_value(json!({"type":"window", "children":[{"type":"editor", "id":"search-editor", "text":"one TWO one", "height":300, "on-search":"search-state", "search": search}]})).unwrap()
+    };
+    event_tx
+        .send(HostEvent::tree(tree(json!({"query":"one"})), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let view = production_view(handle, cx);
+    let editor = view.read_with(cx, |view, _| {
+        view.test_editor_state("search-editor").unwrap()
+    });
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.search_session().matcher.len()),
+        2
+    );
+    let initial = callback_pairs(&drain(&cmd_rx));
+    assert!(initial.iter().any(|(id, value)| {
+        id == "search-state"
+            && value
+                .as_ref()
+                .is_some_and(|v| v["count"] == 2 && v["query"] == "one")
+    }));
+    let request = json!({"query":"one", "action":"next", "generation":1});
+    event_tx
+        .send(HostEvent::tree(tree(request.clone()), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let index = editor.read_with(cx, |editor, _| editor.search_session().matcher.current());
+    event_tx
+        .send(HostEvent::tree(tree(request), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.search_session().matcher.current()),
+        index
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view
+            .test_editor_state("search-editor")
+            .unwrap()
+            .entity_id()),
+        editor.entity_id()
+    );
+    event_tx
+        .send(HostEvent::tree(
+            tree(json!({"query":"two", "case-insensitive":false})),
+            None,
+            vec![],
+        ))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.search_session().matcher.len()),
+        0
+    );
+    event_tx
+        .send(HostEvent::tree(
+            tree(json!({"query":"two", "case-insensitive":true})),
+            None,
+            vec![],
+        ))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        editor.read_with(cx, |editor, _| editor.search_session().matcher.len()),
+        1
+    );
+    handle
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+}
+
+#[gpui_kit::test]
+async fn editor_provider_configuration_retains_state_and_refreshes_live(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(700.), px(500.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let tree = |lsp: serde_json::Value| {
+        serde_json::from_value(json!({"type":"window", "children":[{"type":"editor", "id":"provider-editor", "text":"hello", "height":250,"lsp":lsp}]})).unwrap()
+    };
+    let config =
+        json!({"completions":"stable-provider","hover":"stable-hover","completion-menu-width":480});
+    event_tx
+        .send(HostEvent::tree(tree(config.clone()), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let view = production_view(handle, cx);
+    let editor = view.read_with(cx, |view, _| {
+        view.test_editor_state("provider-editor").unwrap()
+    });
+    let provider = editor.read_with(cx, |editor, _| {
+        assert!(editor.lsp().hover_provider.is_some());
+        assert_eq!(editor.lsp().completion_menu.max_width, px(480.));
+        editor.lsp().completion_provider.clone().unwrap()
+    });
+    event_tx
+        .send(HostEvent::tree(tree(config), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    editor.read_with(cx, |editor, _| {
+        assert!(std::rc::Rc::ptr_eq(
+            &provider,
+            editor.lsp().completion_provider.as_ref().unwrap()
+        ))
+    });
+    event_tx
+        .send(HostEvent::tree(tree(serde_json::Value::Null), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view
+            .test_editor_state("provider-editor")
+            .unwrap()
+            .entity_id()),
+        editor.entity_id()
+    );
+    editor.read_with(cx, |editor, _| {
+        assert!(editor.lsp().completion_provider.is_none())
+    });
+    handle
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+}
+
+#[gpui_kit::test]
+async fn dock_layout_round_trip_keeps_native_panels_and_rich_content(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(850.), px(600.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let tree = |layout: serde_json::Value| {
+        serde_json::from_value(json!({"type":"window", "children":[{"type":"dock", "id":"layout", "height":450,"on-layout-change":"layout-changed","dock-layout":layout,"items":[
+        {"id":"source","label":"Source","content":{"type":"editor","id":"docked-editor","text":"retained","height":300}},
+        {"id":"help","label":"Help","content":{"type":"label","text":"Help"}}
+    ]}]})).unwrap()
+    };
+    event_tx
+        .send(HostEvent::tree(tree(serde_json::Value::Null), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let view = production_view(handle, cx);
+    let area = view.read_with(cx, |view, _| view.test_dock_state("layout").unwrap());
+    let editor = view.read_with(cx, |view, _| {
+        view.test_editor_state("docked-editor").unwrap()
+    });
+    cx.update(|cx| {
+        area.update(cx, |_, cx| {
+            cx.emit(gpui_kit::base::dock::DockEvent::LayoutChanged)
+        })
+    });
+    settle_root(handle, cx);
+    let commands = drain(&cmd_rx);
+    let calls = callback_pairs(&commands);
+    let layout = calls
+        .iter()
+        .find(|(id, _)| id == "layout-changed")
+        .unwrap()
+        .1
+        .clone()
+        .unwrap();
+    let seq = callback_sequence(&commands);
+    assert!(layout.to_string().contains("clj-gpui-panel"));
+    event_tx
+        .send(HostEvent::tree(tree(layout), seq, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        area.entity_id(),
+        view.read_with(cx, |view, _| view
+            .test_dock_state("layout")
+            .unwrap()
+            .entity_id())
+    );
+    assert_eq!(
+        editor.entity_id(),
+        view.read_with(cx, |view, _| view
+            .test_editor_state("docked-editor")
+            .unwrap()
+            .entity_id())
+    );
+    assert!(
+        cmd_rx.try_recv().is_err(),
+        "echoing a native layout must not load and emit it again"
+    );
+    handle
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+}
+
+#[gpui_kit::test]
+async fn markdown_plugins_and_list_initial_slots_mount_retained_controls(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(900.), px(700.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let tree = |text: &str| {
+        serde_json::from_value(json!({"type":"window","children":[
+        {"type":"app-menu-bar","id":"application-menu","items":[{"id":"file","label":"File","items":[{"id":"new","label":"New","on-click":"new"}]}]},
+        {"type":"list","id":"initial-list","searchable":true,"height":150,
+         "initial-content":{"type":"input","id":"initial-control","text":text}},
+        {"type":"markdown","id":"extended-markdown","height":400,
+         "text":"```widget\ncustom\n```\n\nUse [chip](action) here.",
+         "items":[
+             {"id":"block","source":"```widget\ncustom\n```","content":{"type":"editor","id":"markdown-editor","text":text,"height":150}},
+             {"id":"inline","variant":"inline","source":"[chip](action)","content":{"type":"input","id":"markdown-inline","text":text,"width":100,"height":25}}
+         ]}
+    ]})).unwrap()
+    };
+    event_tx
+        .send(HostEvent::tree(tree("first"), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let view = production_view(handle, cx);
+    let editor = view.read_with(cx, |view, _| {
+        view.test_editor_state("markdown-editor")
+            .expect("custom Markdown block")
+    });
+    for id in ["initial-control", "markdown-inline"] {
+        assert!(
+            view.read_with(cx, |view, _| view.test_input_state_id(id).is_some()),
+            "missing {id}"
+        );
+    }
+    assert!(
+        cx.update(|cx| gpui_kit::component::GlobalState::global(cx)
+            .app_menus()
+            .is_empty()),
+        "menu snapshots must not replace global menus"
+    );
+    event_tx
+        .send(HostEvent::tree(tree("second"), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        editor.entity_id(),
+        view.read_with(cx, |view, _| view
+            .test_editor_state("markdown-editor")
+            .unwrap()
+            .entity_id())
+    );
+    assert_eq!(
+        editor.read_with(cx, |state, _| state.value().to_string()),
+        "second"
+    );
+    handle
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+}
+
+#[gpui_kit::test]
+async fn virtualized_editors_retain_state_until_removed_from_the_tree(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(800.), px(600.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let tree = |target: &str, include_first: bool| {
+        let children: Vec<_> = (0..80).map(|i| {
+            if i == 0 && include_first {
+                json!({"type":"vstack","id":"row-0","height":200,"children":[{"type":"editor","id":"virtual-editor","text":"keep me","height":150,"on-blur":format!("blur-{target}")}]})
+            } else {
+                json!({"type":"label","id":format!("row-{i}"),"text":format!("Row {i}"),"height":200})
+            }
+        }).collect();
+        serde_json::from_value(json!({"type":"window","children":[{"type":"virtual-scroll","id":"virtual-editors","height":400,"row-height":200,"scroll-to-item":target,"children":children}]})).unwrap()
+    };
+    event_tx
+        .send(HostEvent::tree(tree("row-0", true), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let view = production_view(handle, cx);
+    let editor = view.read_with(cx, |view, _| {
+        view.test_editor_state("virtual-editor").unwrap()
+    });
+    event_tx
+        .send(HostEvent::tree(tree("row-70", true), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert!(
+        view.read_with(cx, |view, _| view
+            .test_editor_state("virtual-editor")
+            .is_some()),
+        "offscreen is not removed"
+    );
+    drain(&cmd_rx);
+    editor.update(cx, |_, cx| {
+        cx.emit(gpui_kit::component::input::InputEvent::Blur);
+    });
+    cx.run_until_parked();
+    assert!(
+        callback_pairs(&drain(&cmd_rx)).contains(&("blur-row-70".into(), Some(json!("keep me")))),
+        "retained offscreen controls must use the latest callback registry"
+    );
+    event_tx
+        .send(HostEvent::tree(tree("row-0", true), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        editor.entity_id(),
+        view.read_with(cx, |view, _| view
+            .test_editor_state("virtual-editor")
+            .unwrap()
+            .entity_id())
+    );
+    event_tx
+        .send(HostEvent::tree(tree("row-0", false), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert!(view.read_with(cx, |view, _| {
+        view.test_editor_state("virtual-editor").is_none()
+    }));
+    handle
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+}
+
+#[gpui_kit::test]
+async fn editor_options_and_annotations_update_without_replacing_native_state(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        syntax::init(cx);
+    });
+    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(800.), px(600.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let mut tree: Node = serde_json::from_value(json!({"type":"window","children":[{
+        "type":"editor","id":"options-editor","text":"héllo", "height":200,
+        "placeholder":"Write code", "focus":true,
+        "soft-wrap":false,"folding":false,"line-number":false,"indent-guides":false,
+        "show-whitespaces":true,"tab-size":4,"hard-tabs":true,"wrapping-indent":"none",
+        "scroll-beyond-last-line":0,"cursor-surrounding-lines":1,"selected-range":[2,4],
+        "diagnostics":[{"range":{"start":{"line":0,"character":1},"end":{"line":0,"character":3}},"message":"Example","severity":2}],
+        "decorations":[{"range":[2,4],"background":"#ff0000","underline":"wavy"}]
+    }]})).unwrap();
+    event_tx
+        .send(HostEvent::tree(tree.clone(), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let view = production_view(handle, cx);
+    let editor = view.read_with(cx, |view, _| {
+        view.test_editor_state("options-editor").unwrap()
+    });
+    editor.read_with(cx, |state, _| {
+        assert_eq!(
+            state.selected_range(),
+            1..4,
+            "selection clips UTF-8 boundaries"
+        );
+        assert_eq!(state.diagnostics().unwrap().len(), 1);
+        assert_eq!(state.presentation().placeholder().as_ref(), "Write code");
+    });
+    assert_eq!(
+        view.read_with(cx, |view, cx| view
+            .test_decoration_ranges("options-editor", cx)),
+        vec![1..4]
+    );
+    editor.update(cx, |state, cx| state.set_selected_range(5..6, cx));
+    event_tx
+        .send(HostEvent::tree(tree.clone(), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        editor.read_with(cx, |state, _| state.selected_range()),
+        5..6,
+        "an unchanged selection request must not undo native cursor movement"
+    );
+    tree.children[0].placeholder = None;
+    tree.children[0].selection_generation = Some(json!(1));
+    tree.children[0].diagnostics.clear();
+    tree.children[0].decorations.clear();
+    tree.children[0].soft_wrap = None;
+    tree.children[0].folding = None;
+    tree.children[0].line_number = None;
+    tree.children[0].indent_guides = None;
+    event_tx
+        .send(HostEvent::tree(tree, None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    editor.read_with(cx, |state, _| {
+        assert_eq!(state.selected_range(), 1..4);
+        assert!(state.diagnostics().unwrap().is_empty());
+        assert!(state.presentation().placeholder().is_empty());
+    });
+    assert!(
+        view.read_with(cx, |view, cx| view
+            .test_decoration_ranges("options-editor", cx))
+            .is_empty()
+    );
+    assert_eq!(
+        editor.entity_id(),
+        view.read_with(cx, |view, _| view
+            .test_editor_state("options-editor")
+            .unwrap()
+            .entity_id())
+    );
+    handle
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+}
+
+#[gpui_kit::test]
+async fn textarea_native_growth_and_search_survive_tree_updates(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(700.), px(600.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let mut tree: Node = serde_json::from_value(json!({"type":"window","children":[{
+        "type":"textarea","id":"growing-notes","text":"hello", "width":500,
+        "auto-grow":[2,6], "search":{"query":"hello"}
+    }]}))
+    .unwrap();
+    event_tx
+        .send(HostEvent::tree(tree.clone(), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let view = production_view(handle, cx);
+    let notes = view.read_with(cx, |view, _| {
+        view.test_textarea_state("growing-notes").unwrap()
+    });
+    let initial_height = notes.read_with(cx, |state, _| state.input_bounds().size.height);
+    assert_eq!(
+        notes.read_with(cx, |state, _| state.search_session().matcher.len()),
+        1
+    );
+    tree.children[0].text = Some("hello\nsecond\nthird\nfourth\nfifth\nhello\nseventh".into());
+    event_tx
+        .send(HostEvent::tree(tree.clone(), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let grown_height = notes.read_with(cx, |state, _| state.input_bounds().size.height);
+    assert!(
+        grown_height > initial_height,
+        "auto-grow must increase the native control height"
+    );
+    assert_eq!(
+        notes.read_with(cx, |state, _| state.search_session().matcher.len()),
+        2
+    );
+    event_tx
+        .send(HostEvent::tree(tree.clone(), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        notes.read_with(cx, |state, _| state.input_bounds().size.height),
+        grown_height
+    );
+    tree.children[0].auto_grow = None;
+    tree.children[0].rows = Some(2);
+    event_tx
+        .send(HostEvent::tree(tree, None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        notes.entity_id(),
+        view.read_with(cx, |view, _| view
+            .test_textarea_state("growing-notes")
+            .unwrap()
+            .entity_id())
+    );
+    assert_eq!(
+        notes.read_with(cx, |state, _| state.input_bounds().size.height),
+        initial_height
+    );
+    handle
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
 }
