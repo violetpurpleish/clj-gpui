@@ -11,7 +11,7 @@ python3 scripts/inventory-kit.py /path/to/gpui-base-0.6.6/src > docs/inventory/g
 
 The checks below include inherent builders, `ParentElement`/typed child contracts, state and delegate rendering hooks, callback normalization in `gpui.ui`, wire deserialization, and the production renderer. Native implementation details such as entities, focus handles, scroll handles and action types are represented by retained host state and declarative properties, rather than passed across the JVM boundary.
 
-The [0.6.6 migration audit](gpui-kit-0.6.6-migration.md) regenerated both indexes and compared the tagged source changes with 0.6.4. Base and Component declarations are unchanged; no additional widget bindings are needed. The host now uses Kit's fixed masked-label implementation directly. GPUI's new opt-in missing-glyph callback is a possible diagnostics extension, not required for existing widgets.
+The [0.6.6 migration audit](gpui-kit-0.6.6-migration.md) regenerated both indexes and compared the tagged source changes with 0.6.4. Base and Component declarations are unchanged; no additional widget bindings are needed. The host now uses Kit's fixed masked-label implementation directly. GPUI's opt-in missing-glyph callback is exposed as root-window `:on-missing-glyphs`; see [font diagnostics](font-diagnostics.md) for its payload and platform limitations.
 
 ## Child composition
 
@@ -110,7 +110,7 @@ Native deferred builders now use a per-window weak reference to RootView. The ac
 | ResizablePanelGroup / ResizablePanel / ResizableState | `resizable` | Existing typed panels, controlled sizes and resize events |
 | TitleBar | `title-bar` | Existing child widgets, native titlebar geometry and window title handling |
 | StatusBar | `status-bar` | Existing left/right/ordinary children and native styling |
-| Root / WindowBorder | host window | Host-owned window root/overlay layers and frame; not child constructors |
+| Root / WindowBorder | host window | Host-owned window root/overlay layers and frame; opt-in root-window `:on-missing-glyphs` [font diagnostics](font-diagnostics.md); not child constructors |
 | Scrollable / scroll handles | `scroll`, `virtual-scroll` | Existing viewport/axis/scroll state; shared child rendering |
 | Message / MessageGroup / Avatar / Header / Content / Footer | `message-*` | Existing typed slots; arbitrary child widgets now share RootView |
 | Bubble / BubbleContent / BubbleGroup / BubbleReactions | `bubble-*` | Existing alignment/variant/action contracts and children |
@@ -144,10 +144,10 @@ The production tests in `host/src/renderer_integration_tests.rs` run `RootView` 
 
 Validated on macOS against the locked dependencies:
 
-- `cargo test --locked --manifest-path host/Cargo.toml`: **354 passed**, plus the separate missing-monospace process check. The 0.6.6 migration replaces two copied-algorithm label tests with one production-renderer regression.
-- `clojure -M:test`: **131 tests / 2,420 assertions**, no failures or errors.
+- `cargo test --locked --manifest-path host/Cargo.toml`: **356 passed**, plus the separate missing-monospace process check. This includes masked-label rendering and missing-glyph subscription/queue regressions.
+- `clojure -M:test`: **132 tests / 2,430 assertions**, no failures or errors.
 - `cargo clippy --locked --manifest-path host/Cargo.toml --all-targets --test rendering -- -D warnings`, Rust formatting and Clojure formatting: passed.
-- Real JVM/host protocol test: callbacks and reload passed; an asynchronous provider can wait for a button callback without blocking it, and stable provider ids resolve refreshed Clojure functions.
+- Real JVM/host protocol test: callbacks and reload passed; an asynchronous provider can wait for a button callback without blocking it, stable provider ids resolve refreshed Clojure functions, and missing-glyph batches preserve joined/combining Unicode clusters and both font classes.
 - Explicit `--test rendering`: **7 Metal checks passed** using production RootView, including masked-label pixels and composition rendering.
 
 These results do not establish Windows/Linux rendering, physical IME behavior, or integration with an external language-server process.

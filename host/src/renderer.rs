@@ -645,6 +645,7 @@ pub struct RootView {
     dialog_keys: Vec<String>,
     dialog_pending: bool,
     callback_queue: overlay::CallbackQueue,
+    missing_glyphs: Option<Subscription>,
     sheet: Option<overlay::SheetSpec>,
     sheet_live: Rc<RefCell<Option<overlay::SheetSpec>>>,
     sheet_key: Option<String>,
@@ -1081,6 +1082,7 @@ impl RootView {
                                 native_menus: overlay::collect_native_menus(&tree),
                             };
                             view.tree = Some(Rc::from(tree));
+                            view.sync_missing_glyphs(cx);
                             view.tree_revision += 1;
                             view.tree_seq = seq;
                             // A later background tree may arrive before this
@@ -1115,6 +1117,7 @@ impl RootView {
                             let _ = view.cmd_tx.send(Cmd::Render);
                         }
                         HostEvent::Error(err) => {
+                            view.missing_glyphs = None;
                             view.callback_queue.clear();
                             for slot in view.inputs.values_mut() {
                                 slot.echo = None;
@@ -1193,6 +1196,7 @@ impl RootView {
             dialog_keys: Vec::new(),
             dialog_pending: false,
             callback_queue: overlay::CallbackQueue::default(),
+            missing_glyphs: None,
             sheet: None,
             sheet_live: Rc::new(RefCell::new(None)),
             sheet_key: None,
@@ -1443,6 +1447,25 @@ impl RootView {
         // CljSelect queued so the confirm callback can share one batch.
         if !is_command {
             self.flush_callback_queue();
+        }
+    }
+
+    fn sync_missing_glyphs(&mut self, cx: &mut Context<Self>) {
+        let enabled = self
+            .tree
+            .as_deref()
+            .and_then(overlay::missing_glyph_callback)
+            .is_some();
+        if !enabled {
+            self.missing_glyphs = None;
+            self.callback_queue.clear_missing_glyphs();
+        } else if self.missing_glyphs.is_none() {
+            // Keep the subscription across tree/callback-id changes, preserving
+            // GPUI's deduplication. The emitter only holds a weak view reference.
+            let emit = Self::action_emitter(cx);
+            self.missing_glyphs = Some(cx.on_missing_glyphs(move |glyphs, cx| {
+                emit(overlay::QueuedAction::MissingGlyphs(glyphs.to_vec()), cx);
+            }));
         }
     }
 

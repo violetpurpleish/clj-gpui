@@ -44,10 +44,12 @@ features to bind. Existing parity work and the remaining extension gaps are
 recorded in [the current audit](gpui-kit-parity.md).
 
 The underlying GPUI snapshot adds `App::on_missing_glyphs`, an opt-in callback
-for grapheme clusters that exhaust font fallback. A Clojure font-diagnostics
-hook could be useful later, but would need a new callback contract; ordinary
-rendering does not require it. The new shaped-line, underline and atlas APIs
-are low-level native rendering facilities, not missing Kit widget properties.
+for grapheme clusters that exhaust font fallback. A subsequent binding adds
+root-window `:on-missing-glyphs` using the existing protocol-v11 callback
+transport. See [font diagnostics](font-diagnostics.md) for payloads and
+limitations: the published backend emits reports on Linux, but not macOS or
+Windows DirectWrite. The new shaped-line, underline and atlas APIs are
+low-level native rendering facilities, not missing Kit widget properties.
 
 Select dismissal forwarding and Accordion per-item disabled handling are
 still upstream limitations in the published 0.6.6 source. This release does

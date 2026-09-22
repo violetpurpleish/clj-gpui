@@ -10,6 +10,8 @@ There is no Clojars release yet. Depend on this repo with `:local/root` or a git
 
 The host uses GPUI Kit 0.6.6 and GPUI 0.3.6. See the [migration notes](docs/gpui-kit-0.6.6-migration.md) for compatibility and validation details.
 
+`ui/window` supports optional [`:on-missing-glyphs` font diagnostics](docs/font-diagnostics.md). GPUI 0.3.6 currently emits these reports on Linux; its macOS and Windows DirectWrite backends do not emit them.
+
 ![screenshot](https://i.imgur.com/gKXfCnx.png)
 
 ## Quick start

@@ -532,6 +532,37 @@ pub fn protocol_test() -> Result<()> {
         "[host] asynchronous providers use current Clojure functions without blocking callbacks"
     );
 
+    // Exercise Unicode diagnostic payloads through the real JVM callback
+    // registry and JSON socket. Platform reporting is tested separately.
+    host.cmd_tx.send(Cmd::Callback {
+        id: updated
+            .on_missing_glyphs
+            .clone()
+            .context("missing font diagnostics callback")?,
+        value: Some(json!([
+            {"grapheme": "👩‍💻", "font-class": "proportional"},
+            {"grapheme": "e\u{301}", "font-class": "monospace"}
+        ])),
+        seq: None,
+    })?;
+    loop {
+        match host.event_rx.recv_blocking()? {
+            HostEvent::Tree(tree, _, _) => {
+                if !tree.contains_text("👩‍💻")
+                    || !tree.contains_text("e\u{301}")
+                    || !tree.contains_text("proportional")
+                    || !tree.contains_text("monospace")
+                {
+                    bail!("missing-glyph payload did not round-trip through Clojure: {tree:?}");
+                }
+                break;
+            }
+            HostEvent::Error(err) => bail!("missing-glyph callback failed: {err}"),
+            _ => continue,
+        }
+    }
+    println!("[host] missing-glyph Unicode reports round-tripped through Clojure");
+
     host.cmd_tx.send(Cmd::Reload)?;
     let started = Instant::now();
     let mut reloaded = false;

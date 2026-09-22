@@ -1042,6 +1042,9 @@ impl Content {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 pub struct Node {
+    /// Root window's opt-in, application-wide font fallback diagnostics.
+    #[serde(default, rename = "on-missing-glyphs")]
+    pub on_missing_glyphs: Option<String>,
     #[serde(default, rename = "label-layout")]
     pub label_layout: Option<String>,
     #[serde(default, rename = "initial-content")]

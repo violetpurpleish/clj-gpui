@@ -4,6 +4,8 @@ mod catalog;
 mod chat;
 mod extra;
 mod mapping;
+#[cfg(test)]
+mod missing_glyph_tests;
 mod overlay;
 mod preview;
 mod protocol;

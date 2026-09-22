@@ -553,6 +553,7 @@ pub fn latest_dialog_spec(live: &RefCell<Vec<DialogSpec>>, key: &str) -> Option<
 /// the next action can use the replacement callback registry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QueuedAction {
+    MissingGlyphs(Vec<gpui::MissingGlyph>),
     WidgetValue {
         key: String,
         event: String,
@@ -699,7 +700,30 @@ pub struct CallbackQueue {
 }
 
 impl CallbackQueue {
-    pub fn push(&mut self, action: QueuedAction) {
+    pub fn push(&mut self, mut action: QueuedAction) {
+        // Diagnostics are best effort. Keep one bounded pending batch while
+        // Clojure is busy, without dropping ordinary UI actions.
+        if let QueuedAction::MissingGlyphs(glyphs) = &mut action {
+            glyphs.truncate(1024);
+            if glyphs.is_empty() {
+                return;
+            }
+            if let Some(QueuedAction::MissingGlyphs(pending)) = self
+                .pending
+                .iter_mut()
+                .find(|action| matches!(action, QueuedAction::MissingGlyphs(_)))
+            {
+                for glyph in glyphs.iter() {
+                    if pending.len() == 1024 {
+                        break;
+                    }
+                    if !pending.contains(glyph) {
+                        pending.push(glyph.clone());
+                    }
+                }
+                return;
+            }
+        }
         if let QueuedAction::WidgetValue { key, event, .. } = &action
             && matches!(
                 event.as_str(),
@@ -825,10 +849,42 @@ impl CallbackQueue {
         self.wait_for_seq = None;
         self.registry_refreshes_pending = 0;
     }
+
+    pub fn clear_missing_glyphs(&mut self) {
+        self.pending
+            .retain(|action| !matches!(action, QueuedAction::MissingGlyphs(_)));
+    }
+}
+
+pub fn missing_glyph_callback(tree: &Node) -> Option<&str> {
+    (tree.kind == "window")
+        .then_some(tree.on_missing_glyphs.as_deref())
+        .flatten()
+        .filter(|id| !id.is_empty())
 }
 
 impl QueuedAction {
     fn resolve(&self, tree: &Node) -> Vec<protocol::CallbackCall> {
+        if let Self::MissingGlyphs(glyphs) = self {
+            return missing_glyph_callback(tree)
+                .map(|id| {
+                    let reports: Vec<_> = glyphs
+                        .iter()
+                        .map(|glyph| {
+                            json!({
+                                "grapheme": glyph.grapheme(),
+                                "font-class": match glyph.font_class() {
+                                    gpui::FallbackFontClass::Proportional => "proportional",
+                                    gpui::FallbackFontClass::Monospace => "monospace",
+                                }
+                            })
+                        })
+                        .collect();
+                    protocol::CallbackCall::with_value(id.to_string(), json!(reports))
+                })
+                .into_iter()
+                .collect();
+        }
         if let Self::Input {
             key,
             dialog,
@@ -915,6 +971,7 @@ impl QueuedAction {
                 .collect();
         }
         let key = match self {
+            Self::MissingGlyphs(_) => return Vec::new(), // resolved at the root above
             Self::Input { key, .. } | Self::WidgetValue { key, .. } => key,
             Self::ButtonClick { key }
             | Self::ScrollerNodeClick { key, .. }
@@ -931,6 +988,7 @@ impl QueuedAction {
         let mut found = None;
         walk_nodes(tree, "root", &mut |node, path| {
             let kind_matches = match self {
+                Self::MissingGlyphs(_) => false,
                 Self::WidgetValue { .. } => true,
                 Self::Input { .. } => false, // resolved separately above
                 Self::ButtonClick { .. } => node.kind == "button",

@@ -3,13 +3,15 @@
   (:require [gpui.ratom :as r]
             [gpui.ui :as ui]))
 
-(defonce !state (r/atom {:count 0}))
+(defonce !state (r/atom {:count 0 :missing-glyphs []}))
 
 (defn app []
-  (let [{:keys [count]} @!state]
-    (ui/vstack
-     {:gap 12 :padding 16}
+  (let [{:keys [count missing-glyphs]} @!state]
+    (ui/window
+     {:gap 12 :padding 16
+      :on-missing-glyphs #(swap! !state assoc :missing-glyphs %)}
      (ui/label "clj-gpui" {:font-size 18 :font-weight :semibold})
+     (ui/label (str "Missing glyphs: " (pr-str missing-glyphs)))
      (ui/hstack
       {:gap 12}
       (ui/label (str "Count: " count) {:font-size 16})

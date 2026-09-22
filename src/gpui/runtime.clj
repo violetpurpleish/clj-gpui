@@ -176,7 +176,7 @@
     id))
 
 (def ^:private callback-keys
-  [:on-layout-change :on-panel-event :on-click :on-change :on-release :on-submit :on-double-click :on-blur
+  [:on-missing-glyphs :on-layout-change :on-panel-event :on-click :on-change :on-release :on-submit :on-double-click :on-blur
    :on-escape :on-close :on-copied :on-ok :on-cancel :on-confirm
    :on-open-change :on-forward-change :on-search :on-query :on-select :on-export
    :on-reset :on-sort :on-load-more :on-link-click :on-hover :on-paste :on-visible-rows :on-visible-columns :on-matched-count])

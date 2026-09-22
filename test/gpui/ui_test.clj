@@ -51,6 +51,31 @@
 (deftest window-title
   (is (= "clj-gpui" ui/window-title)))
 
+(deftest window-missing-glyph-callback-round-trips-unicode-and-refreshes
+  (let [seen (atom [])
+        reports (json/read-str
+                 (json/write-str [{:grapheme "👩‍💻" :font-class "proportional"}
+                                  {:grapheme "é" :font-class "monospace"}])
+                 :key-fn keyword)
+        exported (runtime/export-tree
+                  (ui/window {:on-missing-glyphs #(swap! seen conj [:first %])}
+                             (ui/label "Diagnostics")))
+        first-id (:on-missing-glyphs exported)]
+    (is (string? first-id))
+    (is (:ok (runtime/invoke-callback! first-id reports)))
+    (is (= [[:first reports]] @seen))
+    (let [fresh (runtime/export-tree
+                 (ui/window {:on-missing-glyphs #(swap! seen conj [:fresh %])}))
+          fresh-id (:on-missing-glyphs fresh)]
+      (is (not= first-id fresh-id))
+      (is (nil? (runtime/lookup-callback first-id)))
+      (is (:ok (runtime/invoke-callback! fresh-id reports)))
+      (is (= [[:first reports] [:fresh reports]] @seen))
+      (is (nil? (:on-missing-glyphs
+                 (runtime/export-tree (ui/window {:on-missing-glyphs nil})))))
+      (is (nil? (runtime/lookup-callback fresh-id))))
+    (is (not (contains? (runtime/export-tree (ui/window)) :on-missing-glyphs)))))
+
 (deftest title-bar-children-and-style
   (is (= {:type :title-bar :children []} (ui/title-bar)))
   (is (= [(ui/label "App") (ui/label "One") (ui/label "Two")]

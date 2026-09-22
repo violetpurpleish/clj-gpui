@@ -734,6 +734,17 @@
   A direct `title-bar` child in the initial tree opts into GPUI Kit's
   custom native titlebar. `:chrome` only controls the development HUD.
 
+  `:on-missing-glyphs` opts into application-wide font diagnostics. The
+  callback receives a vector of maps with `:grapheme` (the whole Unicode
+  cluster) and `:font-class` (`\"proportional\"` or `\"monospace\"`).
+  Reports mean all available fallback fonts were exhausted; they do not
+  identify a widget or requested font. Delivery is asynchronous, deduplicated
+  and best effort (at most 1024 pending reports). Omit or set nil to disable.
+  Ordinary rerenders retain the subscription; re-enabling starts a new
+  reporting session. See docs/font-diagnostics.md for an example.
+  In GPUI 0.3.6, reports come from Linux's Cosmic Text backend.
+  macOS and Windows DirectWrite do not emit them.
+
   `:theme` may live here (default for the window and the footer) or on
   any nested node, so different parts of the app can use different themes.
   Appearance is `:system` (follow the OS), `:light`, or `:dark`. A named

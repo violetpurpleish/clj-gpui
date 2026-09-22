@@ -36,7 +36,7 @@ Coverage-table **status** is not Kit public-API parity by itself:
 | `label::Label` | `ui/label` | ✅ | A | Kit `Label`. `:secondary`, `:masked`, `:highlights` / `:highlights-match`. Kit masks primary and secondary text and suppresses highlights while masked; unmasking restores both styles. Styled clip: `:truncate`, `:whitespace`, `:text-overflow`, `:overflow`, `:line-clamp`. Clicks wrap a host `div` |
 | `h_flex` / `v_flex` | `ui/hstack` / `ui/vstack` | ✅ | A | |
 | `scroll::ScrollableElement` | `ui/scroll` | ✅ | A | Flex leftover viewport; see the list-scroll layout fix |
-| `Root` | (host) | ✅ | D | Window wrapper; not an app widget |
+| `Root` | (host) | ✅ | D | Window wrapper; not an app widget. `ui/window` also exposes opt-in application-wide [font diagnostics](font-diagnostics.md) with `:on-missing-glyphs` |
 | `theme::*` | `:theme` / `gpui.theme` | ✅ | A | Existing ThemeSet architecture |
 | Switch | `switch` | See audit | — | Added `:checked-color` for native checked-track color |
 | `button::Toggle` | `ui/toggle` | ✅ | B | Button-style toggle; `:on-change` receives boolean. Native `:tooltip`. `:icon` is a kebab name. `:variant` `:ghost` / `:outline` |
