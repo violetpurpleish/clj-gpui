@@ -1586,13 +1586,13 @@ input/textarea.rs	123	public	pub fn on_paste( mut self, handler: impl Fn(&gpui::
 input/textarea.rs	132	impl	impl Styled for Textarea {
 input/textarea.rs	138	impl	impl Textarea {
 input/textarea.rs	162	impl	impl RenderOnce for Textarea {
-inspector.rs	72	public	pub struct DivInspector {
-inspector.rs	84	impl	impl DivInspector {
-inspector.rs	85	public	pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-inspector.rs	156	public	pub fn update_inspected_element( &mut self, inspector_id: InspectorElementId, state: DivInspectorState, window: &mut Window, cx: &mut Context<Self>, ) {
-inspector.rs	285	impl	impl StyleMethods {
-inspector.rs	405	impl	impl Render for DivInspector {
-inspector.rs	567	impl	impl CompletionProvider for LspProvider {
+inspector.rs	73	public	pub struct DivInspector {
+inspector.rs	85	impl	impl DivInspector {
+inspector.rs	86	public	pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+inspector.rs	157	public	pub fn update_inspected_element( &mut self, inspector_id: InspectorElementId, state: DivInspectorState, window: &mut Window, cx: &mut Context<Self>, ) {
+inspector.rs	286	impl	impl StyleMethods {
+inspector.rs	406	impl	impl Render for DivInspector {
+inspector.rs	568	impl	impl CompletionProvider for LspProvider {
 kbd.rs	11	public	pub struct Kbd {
 kbd.rs	18	impl	impl From<Keystroke> for Kbd {
 kbd.rs	29	impl	impl Kbd {
@@ -1618,8 +1618,8 @@ label.rs	63	public	pub fn new(label: impl Into<SharedString>) -> Self {
 label.rs	76	public	pub fn secondary(mut self, secondary: impl Into<SharedString>) -> Self {
 label.rs	82	public	pub fn masked(mut self, masked: bool) -> Self {
 label.rs	88	public	pub fn highlights(mut self, text: impl Into<HighlightsMatch>) -> Self {
-label.rs	188	impl	impl Styled for Label {
-label.rs	194	impl	impl RenderOnce for Label {
+label.rs	192	impl	impl Styled for Label {
+label.rs	198	impl	impl RenderOnce for Label {
 lib.rs	6	public	pub mod global_state;
 lib.rs	22	public	pub use gpui_base::actions::*;
 lib.rs	25	public	pub mod accordion;

@@ -277,6 +277,63 @@ mod macos {
             .save("/private/tmp/clj-gpui-parity.png")
             .unwrap();
 
+        // Masked labels must paint only bullets, even with secondary text and
+        // ASCII/Unicode highlights. Revealing the same tree restores styling.
+        let mut label_images = Vec::new();
+        for mode in ["masked", "bullets", "revealed", "plain", "masked"] {
+            let children: Vec<_> = [
+                ("Hello", Some("World"), None, "full"),
+                ("Hello", None, Some("ell"), "full"),
+                ("é🙂", Some("世界"), Some("🙂 世"), "full"),
+                ("café", Some("世界"), Some("ca"), "prefix"),
+            ]
+            .into_iter()
+            .map(|(text, secondary, highlights, matching)| {
+                let full_text = secondary
+                    .map(|secondary| format!("{text} {secondary}"))
+                    .unwrap_or_else(|| text.to_string());
+                match mode {
+                    "bullets" | "plain" => json!({
+                        "type": "label", "font-size": 22,
+                        "text": if mode == "bullets" {
+                            "•".repeat(full_text.chars().count())
+                        } else { full_text }
+                    }),
+                    _ => json!({
+                        "type": "label", "font-size": 22, "text": text,
+                        "secondary": secondary, "highlights": highlights,
+                        "highlights-match": matching, "masked": mode == "masked"
+                    }),
+                }
+            })
+            .collect();
+            event_tx
+                .send_blocking(protocol::HostEvent::tree(
+                    serde_json::from_value(json!({
+                        "type": "window", "chrome": "app", "theme": "light",
+                        "padding": 20, "gap": 12, "children": children
+                    }))
+                    .unwrap(),
+                    None,
+                    vec![],
+                ))
+                .unwrap();
+            cx.run_until_parked();
+            cx.update_window(handle.into(), |_, window, cx| window.render_frame(cx))
+                .unwrap();
+            label_images.push(cx.capture_screenshot(handle.into()).unwrap());
+        }
+        if label_images[0] != label_images[1]
+            || label_images[0] != label_images[4]
+            || label_images[0] == label_images[2]
+            || label_images[2] == label_images[3]
+        {
+            for (i, image) in label_images.iter().enumerate() {
+                save_failure(&format!("label-mask-{i}"), image);
+            }
+            panic!("masked label pixels must match bullets and restore highlights on reveal");
+        }
+
         // The default pie radius must come from its actual layout, including
         // a flex-filled viewport taller than chart_viewport's 180px fallback.
         // Explicit and partial per-slice radii must still win.
@@ -338,6 +395,6 @@ mod macos {
             }
         }
 
-        println!("rendering: 6 passed (production RootView, Metal)");
+        println!("rendering: 7 passed (production RootView, Metal)");
     }
 }

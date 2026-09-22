@@ -1,15 +1,17 @@
 # GPUI Kit parity audit
 
-Audit target: the repository's locked **gpui-kit 0.6.4**, **gpui-component 0.6.4**, **gpui-base 0.6.4**, and **gpui-pre 0.3.5**. This is a source audit, not an assertion that having a constructor is equivalent to exposing every native API. `gpui-shell` and `gpui-wry` remain the two deliberate subsystem exclusions.
+Audit target: the repository's locked **gpui-kit 0.6.6**, **gpui-component 0.6.6**, **gpui-base 0.6.6**, and **gpui-pre 0.3.6**. This is a source audit, not an assertion that having a constructor is equivalent to exposing every native API. `gpui-shell` and `gpui-wry` remain the two deliberate subsystem exclusions.
 
-The reproducible source indexes record [Component declarations and trait contracts](inventory/gpui-component-0.6.4.tsv) and [Base declarations and trait contracts](inventory/gpui-base-0.6.4.tsv). These indexes include implementation modules; public reachability and macro-generated APIs require the family audit below. Regenerate it with:
+The reproducible source indexes record [Component declarations and trait contracts](inventory/gpui-component-0.6.6.tsv) and [Base declarations and trait contracts](inventory/gpui-base-0.6.6.tsv). These indexes include implementation modules; public reachability and macro-generated APIs require the family audit below. Regenerate it with:
 
 ```sh
-python3 scripts/inventory-kit.py /path/to/gpui-component-0.6.4/src > docs/inventory/gpui-component-0.6.4.tsv
-python3 scripts/inventory-kit.py /path/to/gpui-base-0.6.4/src > docs/inventory/gpui-base-0.6.4.tsv
+python3 scripts/inventory-kit.py /path/to/gpui-component-0.6.6/src > docs/inventory/gpui-component-0.6.6.tsv
+python3 scripts/inventory-kit.py /path/to/gpui-base-0.6.6/src > docs/inventory/gpui-base-0.6.6.tsv
 ```
 
 The checks below include inherent builders, `ParentElement`/typed child contracts, state and delegate rendering hooks, callback normalization in `gpui.ui`, wire deserialization, and the production renderer. Native implementation details such as entities, focus handles, scroll handles and action types are represented by retained host state and declarative properties, rather than passed across the JVM boundary.
+
+The [0.6.6 migration audit](gpui-kit-0.6.6-migration.md) regenerated both indexes and compared the tagged source changes with 0.6.4. Base and Component declarations are unchanged; no additional widget bindings are needed. The host now uses Kit's fixed masked-label implementation directly. GPUI's new opt-in missing-glyph callback is a possible diagnostics extension, not required for existing widgets.
 
 ## Child composition
 
@@ -134,7 +136,7 @@ These require further protocol/API work to reach literal native-API parity. They
 
 The pinned Base `CompletionProvider::resolve_completions` hook has no caller and takes the uninhabited `lsp_types::request::Completion` marker instead of completion items; it is not an operational feature that the binding can expose.
 
-The native Select wrapper in 0.6.4 does not forward BaseSelect's dismissal event. Accordion 0.6.4 overwrites individual item disabled state with its parent flag. These are upstream limitations, not silently omitted binding properties.
+The native Select wrapper in 0.6.6 does not forward BaseSelect's dismissal event. Accordion 0.6.6 overwrites individual item disabled state with its parent flag. These are upstream limitations, not silently omitted binding properties.
 
 ## Verification
 
@@ -142,11 +144,11 @@ The production tests in `host/src/renderer_integration_tests.rs` run `RootView` 
 
 Validated on macOS against the locked dependencies:
 
-- `cargo test --locked --manifest-path host/Cargo.toml`: **355 passed**, plus the separate missing-monospace process check.
+- `cargo test --locked --manifest-path host/Cargo.toml`: **354 passed**, plus the separate missing-monospace process check. The 0.6.6 migration replaces two copied-algorithm label tests with one production-renderer regression.
 - `clojure -M:test`: **131 tests / 2,420 assertions**, no failures or errors.
 - `cargo clippy --locked --manifest-path host/Cargo.toml --all-targets --test rendering -- -D warnings`, Rust formatting and Clojure formatting: passed.
 - Real JVM/host protocol test: callbacks and reload passed; an asynchronous provider can wait for a button callback without blocking it, and stable provider ids resolve refreshed Clojure functions.
-- Explicit `--test rendering`: **6 Metal checks passed** using production RootView. The composition screenshot was inspected.
+- Explicit `--test rendering`: **7 Metal checks passed** using production RootView, including masked-label pixels and composition rendering.
 
 These results do not establish Windows/Linux rendering, physical IME behavior, or integration with an external language-server process.
 

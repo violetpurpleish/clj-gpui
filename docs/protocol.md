@@ -84,6 +84,8 @@ The 0.6.1 dependency update remains protocol v11 because every new field is addi
 
 The 0.6.4 migration also remains protocol v11: dependencies and pie-radius rendering changed, with no wire fields or callback payload changes. See [migration notes](gpui-kit-0.6.4-migration.md).
 
+The 0.6.6 migration remains protocol v11. The host now forwards masked-label secondary text and highlights directly to the fixed Kit implementation; existing properties and callbacks are unchanged. See [migration notes](gpui-kit-0.6.6-migration.md).
+
 ## Host → Clojure ops
 
 Each request includes a unique numeric `id`. Clojure echoes it on the response.
@@ -341,8 +343,8 @@ for constructor shorthand details.
 | `whitespace` | string | GPUI whitespace: `nowrap` / `normal` |
 | `text-overflow` | string | GPUI text overflow: `ellipsis` / `ellipsis-start` / `ellipsis-middle` (path-friendly). Not AvatarGroup `ellipsis` |
 | `line-clamp` | number | GPUI `line_clamp` (also overflow-hidden). The pinned GPUI shaper does not enforce a total line cap across explicit newlines; see [rendering boundaries](rendering-boundaries.md) |
-| `secondary` | string | `label`: Kit `Label::secondary` muted trailing text. With `masked`, folded into the bullet string (same count as Kit `full_text`) |
-| `highlights` | string | `label`: Kit `Label::highlights` search text. Omitted when `masked` (Kit 0.6 measures original-string byte ranges on U+2022 glyphs) |
+| `secondary` | string | `label`: Kit `Label::secondary` muted trailing text. Kit masks both text parts when `masked` is true |
+| `highlights` | string | `label`: Kit `Label::highlights` search text. Kit suppresses highlights while masked and restores them when revealed |
 | `highlights-match` | string | `label`: `full` (default) or `prefix` |
 | `autohide` | bool | `notification` (default true) |
 | `language` | string | `editor` highlighter (`rust`, `json`, `markdown`, …; default `text`). Kit's `tree-sitter-languages` bundle is enabled; the host also registers a Clojure grammar |
@@ -433,7 +435,7 @@ for constructor shorthand details.
 
 Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-click` / `:on-change` / `:on-release` / `:on-submit` / `:on-double-click` / `:on-blur` / `:on-escape` / `:on-close` / `:on-copied` / `:on-ok` / `:on-cancel` / `:on-confirm` / `:on-select` / `:on-open-change` / `:on-forward-change` / `:on-query` / `:on-export` / `:on-sort` / `:on-load-more` with ids such as `"cb-2"`. Nested `:items` / `:options` / `:links` / `:series` / `:content` / `:trigger` / `:footer` / `:left` / `:right` are walked too. The registry is rebuilt on every export. `nav-stack` `:item` is a static recipe map (or `"slide"`), not a callback: phase and progress are per-frame and are applied by the host. A Clojure `:item` function is dropped as JSON `false` so it still suppresses `transition-style` rather than resurrecting `slide`.
 
-The native host paints these nodes with [GPUI Kit](https://gpui-kit.com) 0.6.4 (`gpui-kit` crate, `tree-sitter-languages`). Icon-bearing widgets load named SVGs from the complete `gpui-kit-assets` catalog or accept inline UTF-8 `icon-svg` content. See [gpui-component.md](gpui-component.md) for the coverage inventory.
+The native host paints these nodes with [GPUI Kit](https://gpui-kit.com) 0.6.6 (`gpui-kit` crate, `tree-sitter-languages`). Icon-bearing widgets load named SVGs from the complete `gpui-kit-assets` catalog or accept inline UTF-8 `icon-svg` content. See [gpui-component.md](gpui-component.md) for the coverage inventory.
 
 A `scroll` node is a vertical overflow viewport. Without `height`, the host gives it `flex: 1` and `min-height: 0` so it takes leftover space in a column instead of growing with its children. `height` is a fixed pixel viewport. `width` constrains the viewport; omitted, it fills the parent. `size` is a square viewport, matching other nodes (it wins over `width` / `height`). Visual styles (`padding`, `bg`, `border`, …) apply to the inner scroll body, not twice. `flex: 1` on other nodes also sets `min-height: 0`.
 

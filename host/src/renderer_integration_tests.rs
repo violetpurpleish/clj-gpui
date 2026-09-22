@@ -105,6 +105,51 @@ fn paint_root(handle: WindowHandle<Root>, cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+async fn masked_labels_render_secondary_and_highlights_after_tree_updates(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(640.), px(360.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    // Exercise the real Kit Label instead of duplicating its highlight math.
+    // The old upstream implementation panicked on these masked byte ranges.
+    for masked in [true, false, true] {
+        event_tx
+            .send(HostEvent::tree(
+                serde_json::from_value(json!({
+                    "type": "window", "chrome": "app", "gap": 12,
+                    "children": [
+                        {"type": "label", "text": "Hello", "secondary": "World", "masked": masked},
+                        {"type": "label", "text": "Hello", "highlights": "ell", "masked": masked},
+                        {"type": "label", "text": "é🙂", "secondary": "世界",
+                         "highlights": "🙂 世", "masked": masked},
+                        {"type": "label", "text": "café",
+                         "secondary": "世界", "highlights": "ca", "highlights-match": "prefix",
+                         "masked": masked},
+                        {"type": "button", "id": "after-labels", "text": "Continue"}
+                    ]
+                }))
+                .unwrap(),
+                None,
+                vec![],
+            ))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        cx.update_window(handle.into(), |_, window, _| {
+            // Labels have no Kit observation record; the following button
+            // confirms the frame completed and the label rows took space.
+            let button = window.find("after-labels");
+            assert!(button.visible());
+            assert!(button.bounds().origin.y > px(48.));
+        })
+        .unwrap();
+    }
+}
+
+#[gpui_kit::test]
 async fn title_bar_renders_styled_children_and_keeps_title_updates(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);

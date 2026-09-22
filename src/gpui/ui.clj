@@ -625,10 +625,9 @@
 
   Kit extras: `:secondary` is muted trailing text, `:masked true` paints
   bullets, `:highlights` is the search string (`:highlights-match
-  :prefix` or `:full`, default full). `:masked` folds `:secondary` into
-  the bullet string and skips `:highlights`: Kit 0.6 measures original
-  UTF-8 byte ranges after swapping in U+2022 glyphs, which is not a
-  char-boundary-safe `StyledText` paint.
+  :prefix` or `:full`, default full). Kit masks both primary and secondary
+  text and skips highlights while masked; revealing the label restores
+  secondary styling and search highlights.
 
   (ui/label \"Hello\")
   (ui/label \"Hello\" {:font-size 20 :font-weight :bold})
@@ -1339,7 +1338,7 @@
   Kit Select chrome: `:cleanable`, `:title-prefix`, `:menu-width` /
   `:menu-max-h` (px), `:search-placeholder`, `:empty` (text or widget), `:icon`,
   `:appearance`, `:focus-ring` (Kit `FocusableExt`; omit = Kit true),
-  `:accessibility-label`. Kit 0.6.4's styled Select does not forward its
+  `:accessibility-label`. Kit 0.6.6's styled Select does not forward its
   base dismiss event, so there is deliberately no `:on-dismiss`; selection
   confirmation remains distinct from merely closing the menu. Group titles are not selectable and are not
   in the callback id map. Items accept `:content` and a widget `:display`;

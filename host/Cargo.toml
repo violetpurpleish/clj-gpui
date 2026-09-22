@@ -22,11 +22,12 @@ anyhow = "1"
 async-channel = "2"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
-gpui-kit = { version = "0.6.4", features = ["tree-sitter-languages"] }
-gpui-fps = "0.6.4"
+gpui-kit = { version = "0.6.6", features = ["tree-sitter-languages"] }
+gpui-fps = "0.6.6"
 # Direct alias for the already-transitive matching GPUI snapshot. Remote
 # Avatar `:src` (and other `img` URIs) never load on NullHttpClient.
-reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.5" }
+# Match Kit's exact snapshot pin: GPUI snapshots can change Rust APIs.
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.6" }
 lsp-types = "0.97"
 image = { version = "0.25", default-features = false, features = ["png"] }
 regex = "1"
@@ -53,4 +54,4 @@ objc2-screen-capture-kit = "0.3"
 raw-window-handle = "0.6"
 
 [dev-dependencies]
-gpui-kit = { version = "0.6.4", features = ["test-support", "tree-sitter-languages"] }
+gpui-kit = { version = "0.6.6", features = ["test-support", "tree-sitter-languages"] }
