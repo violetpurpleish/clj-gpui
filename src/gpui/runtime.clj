@@ -176,7 +176,7 @@
     id))
 
 (def ^:private callback-keys
-  [:on-missing-glyphs :on-layout-change :on-panel-event :on-click :on-change :on-release :on-submit :on-double-click :on-blur
+  [:on-current-change :on-complete :on-remove :on-retry :on-dismiss :on-token-click :on-content-change :on-reveal :on-text-state :on-missing-glyphs :on-layout-change :on-panel-event :on-click :on-change :on-release :on-submit :on-double-click :on-blur
    :on-escape :on-close :on-copied :on-ok :on-cancel :on-confirm
    :on-open-change :on-forward-change :on-search :on-query :on-select :on-export
    :on-reset :on-sort :on-load-more :on-link-click :on-hover :on-paste :on-visible-rows :on-visible-columns :on-matched-count])
@@ -197,7 +197,7 @@
   #{:disabled :separator :expanded})
 
 (def ^:private node-boolean-overrides
-  #{:soft-wrap :folding :line-number :indent-guides :show-whitespaces :hard-tabs :external-link-icon :mdx :checked :interactive :filterable :bordered :focus-ring :open :overlay-closable
+  #{:arrow :y-axis :grid-dashed :soft-wrap :folding :line-number :indent-guides :show-whitespaces :hard-tabs :external-link-icon :mdx :checked :interactive :filterable :bordered :focus-ring :open :overlay-closable
     :autohide :auto-close :smart-indent :label-axis :value-axis :grid :labels :x-axis
     :node-label :value-label :reuse-forward :appearance :content-inset :scrollbar
     :jump-button :scroll-to-end :cell-selectable :row-header :stripe :sortable
@@ -257,7 +257,7 @@
                    ;; A TableCell object is a Node even without a :type key.
                    (update-typed-sequence :cells prepare-node-booleans path))]
       (reduce (fn [m k] (update-typed m k prepare-node-booleans path))
-              item [:content :style :label-style :display-content :suffix :title-style :content-style :hover-style :header :footer]))
+              item [:tooltip-content :content :style :label-style :display-content :suffix :title-style :content-style :hover-style :header :footer]))
     item))
 
 (defn- prepare-nav-case-booleans [recipe path]
@@ -297,7 +297,7 @@
                    (update-typed :item prepare-nav-booleans path)
                    (update-typed :custom-variant prepare-custom-variant-booleans path))]
       (reduce (fn [m k] (update-typed m k prepare-node-booleans path))
-              node [:last-column-content :tooltip-content :action :code-block-actions :table-actions :content :header :description :label-content :prefix :suffix :empty :loading-content :initial-content :title-style :header-style :sidebar-style :hover-style :track-style :trigger-style :trigger :footer :stack-style :shimmer-style :separator-style
+              node [:indicator-style :shortcut-style :token-style :last-column-content :tooltip-content :action :code-block-actions :table-actions :content :header :description :label-content :prefix :suffix :empty :loading-content :initial-content :title-style :header-style :sidebar-style :hover-style :track-style :trigger-style :trigger :footer :stack-style :shimmer-style :separator-style
                     :content-style :list-style :row-style :jump-button-style
                     :jump-button-renderer]))
     node))
@@ -311,6 +311,7 @@
                         m))
                     item
                     callback-keys)
+      (some? (:tooltip-content item)) (update :tooltip-content sanitize)
       (some? (:content item)) (update :content sanitize)
       (some? (:display-content item)) (update :display-content sanitize)
       (some? (:suffix item)) (update :suffix sanitize)
@@ -327,7 +328,7 @@
     item))
 
 (def ^:private nested-node-keys
-  [:last-column-content :tooltip-content :action :code-block-actions :table-actions :content :header :description :label-content :prefix :suffix :empty :loading-content :initial-content :title-style :header-style :sidebar-style :hover-style :track-style :trigger-style :trigger :footer :stack-style :shimmer-style :separator-style
+  [:indicator-style :shortcut-style :token-style :last-column-content :tooltip-content :action :code-block-actions :table-actions :content :header :description :label-content :prefix :suffix :empty :loading-content :initial-content :title-style :header-style :sidebar-style :hover-style :track-style :trigger-style :trigger :footer :stack-style :shimmer-style :separator-style
    :content-style :list-style :row-style :jump-button-style
    :jump-button-renderer :left :right])
 

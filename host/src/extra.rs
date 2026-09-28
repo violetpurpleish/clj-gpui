@@ -1210,6 +1210,11 @@ pub fn date_to_value(date: Date) -> Value {
 /// OHLC; sankey nodes use `id`/`label`/`color` and links live on the node.
 #[derive(Debug, Clone)]
 pub struct ChartPoint {
+    pub tooltip_title: Option<String>,
+    pub tooltip_value: Option<Value>,
+    pub tooltip_value_color: Option<Value>,
+    pub tooltip_content: Option<Box<Node>>,
+    pub label_color: Option<String>,
     pub index: usize,
     pub id: String,
     pub label: String,
@@ -1242,6 +1247,11 @@ impl ChartPoint {
             .map(|n| n as f64)
             .or_else(|| values.first().copied());
         Self {
+            tooltip_title: item.tooltip_title.clone(),
+            tooltip_value: item.tooltip_value.clone(),
+            tooltip_value_color: item.tooltip_value_color.clone(),
+            tooltip_content: item.tooltip_content.clone(),
+            label_color: item.label_color.clone(),
             index: 0,
             id: item.id_or_label(),
             label: item.label_or_id(),
@@ -1933,6 +1943,7 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
     let mut points = chart_points(node);
     let kind = chart_kind(node);
     let stroke = cx.theme().chart_1;
+    let tooltip_color = cx.theme().foreground;
     let chart: gpui::AnyElement = match kind.as_str() {
         "bar" => {
             let labels_on = node.labels.unwrap_or(false)
@@ -2016,6 +2027,58 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             if labels_on {
                 bar = bar.label(|p| p.bar_label());
             }
+            bar = bar
+                .interactive(chart_interactive(node))
+                .id(SharedString::from(format!("{key}/plot")));
+            if let Some(n) = node.band_count {
+                bar = bar.band_count(n);
+            }
+            if let Some(n) = node.band_tick_count {
+                bar = bar.band_tick_count(n);
+            }
+            if let Some(v) = node.grid_dashed {
+                bar = bar.grid_dashed(v);
+            }
+            if let Some(v) = &node.value_axis_label_placement {
+                bar = bar.value_axis_label_placement(axis_label_placement(v));
+            }
+            if let Some(v) = node.value_tick_format.clone() {
+                bar = bar.value_tick_format(move |n| format_chart_tick(n, &v));
+            }
+            if let Some(v) = node.padding_inner {
+                bar = bar.padding_inner(v);
+            }
+            if let Some(v) = node.padding_outer {
+                bar = bar.padding_outer(v);
+            }
+            if let Some(v) = node.min_length {
+                bar = bar.min_length(v);
+            }
+            if let Some(v) = node.max_band_width {
+                bar = bar.max_band_width(px(v));
+            }
+            let label_color = node
+                .label_color
+                .as_deref()
+                .and_then(parse_hex_color)
+                .unwrap_or(tooltip_color);
+            bar = bar.label_color(move |p| {
+                p.label_color
+                    .as_deref()
+                    .and_then(parse_hex_color)
+                    .unwrap_or(label_color)
+            });
+            bar = bar
+                .tooltip_title(chart_tooltip_title)
+                .tooltip_value(|p, v| chart_tooltip_value(p, 0, v))
+                .tooltip_value_color(move |p, v| chart_tooltip_color(p, 0, v, tooltip_color));
+            if node
+                .collection()
+                .iter()
+                .any(|i| i.tooltip_content.is_some())
+            {
+                bar = bar.tooltip_content(chart_tooltip_content);
+            }
             bar.into_any_element()
         }
         "area" => {
@@ -2076,6 +2139,53 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             if let Some(grid) = node.grid {
                 chart = chart.grid(grid);
             }
+            chart = chart
+                .interactive(chart_interactive(node))
+                .id(SharedString::from(format!("{key}/plot")))
+                .tooltip_title(chart_tooltip_title);
+            chart = chart
+                .tooltip_value(chart_tooltip_value)
+                .tooltip_value_color(move |p, i, v| chart_tooltip_color(p, i, v, tooltip_color));
+            if node
+                .collection()
+                .iter()
+                .any(|i| i.tooltip_content.is_some())
+            {
+                chart = chart.tooltip_content(chart_tooltip_content);
+            }
+            if let Some([min, max]) = node.y_domain {
+                chart = chart.y_domain(min, max);
+            }
+            if let Some(n) = node.point_count {
+                chart = chart.point_count(n);
+            }
+            if let Some(v) = node.y_axis {
+                chart = chart.y_axis(v);
+            }
+            if let Some(v) = &node.y_axis_label_placement {
+                chart = chart.y_axis_label_placement(axis_label_placement(v));
+            }
+            if let Some(n) = node.y_tick_count {
+                chart = chart.y_tick_count(n);
+            }
+            if let Some(n) = node.x_tick_count {
+                chart = chart.x_tick_count(n);
+            }
+            if let Some(n) = node.grid_columns {
+                chart = chart.grid_columns(n);
+            }
+            if let Some(v) = node.grid_dashed {
+                chart = chart.grid_dashed(v);
+            }
+            if let Some(v) = node.y_tick_format.clone() {
+                chart = chart.y_tick_format(move |n| format_chart_tick(n, &v));
+            }
+            if let Some([top, bottom]) = node.y_padding {
+                chart = chart.y_padding(top, bottom);
+            }
+            for value in &node.reference_lines {
+                chart = chart.reference_line(*value);
+            }
             chart.into_any_element()
         }
         "pie" => {
@@ -2124,6 +2234,11 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             if let Some(gap) = node.label_gap {
                 pie = pie.label_gap(gap);
             }
+            pie = pie
+                .interactive(chart_interactive(node))
+                .id(SharedString::from(format!("{key}/plot")))
+                .tooltip_name(chart_tooltip_title)
+                .tooltip_value(|p, v, _| chart_tooltip_value(p, 0, v as f64));
             pie.into_any_element()
         }
         "radar" => {
@@ -2185,6 +2300,19 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
                     radar = radar.fill(series_fill);
                 }
             }
+            radar = radar
+                .interactive(chart_interactive(node))
+                .id(SharedString::from(format!("{key}/plot")))
+                .tooltip_title(chart_tooltip_title)
+                .tooltip_value(chart_tooltip_value)
+                .tooltip_value_color(move |p, i, v| chart_tooltip_color(p, i, v, tooltip_color));
+            if node
+                .collection()
+                .iter()
+                .any(|i| i.tooltip_content.is_some())
+            {
+                radar = radar.tooltip_content(chart_tooltip_content);
+            }
             radar.into_any_element()
         }
         "candlestick" => {
@@ -2209,6 +2337,23 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             }
             if let Some(show) = node.x_axis {
                 chart = chart.x_axis(show);
+            }
+            chart = chart
+                .interactive(chart_interactive(node))
+                .id(SharedString::from(format!("{key}/plot")))
+                .tooltip_title(chart_tooltip_title);
+            chart = chart
+                .tooltip_value(chart_tooltip_value)
+                .tooltip_value_color(move |p, i, v| chart_tooltip_color(p, i, v, tooltip_color));
+            if node
+                .collection()
+                .iter()
+                .any(|i| i.tooltip_content.is_some())
+            {
+                chart = chart.tooltip_content(chart_tooltip_content);
+            }
+            if let Some(v) = node.max_band_width {
+                chart = chart.max_band_width(px(v));
             }
             chart.into_any_element()
         }
@@ -2271,6 +2416,12 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
                     }
                 });
             }
+            chart = chart
+                .interactive(chart_interactive(node))
+                .id(SharedString::from(format!("{key}/plot")));
+            chart = chart
+                .tooltip_name(chart_tooltip_title)
+                .tooltip_value(|p, v| chart_tooltip_value(p, 0, v));
             chart.into_any_element()
         }
         _ => {
@@ -2301,6 +2452,53 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             }
             if let Some(grid) = node.grid {
                 chart = chart.grid(grid);
+            }
+            chart = chart
+                .interactive(chart_interactive(node))
+                .id(SharedString::from(format!("{key}/plot")))
+                .tooltip_title(chart_tooltip_title);
+            chart = chart
+                .tooltip_value(|p, v| chart_tooltip_value(p, 0, v))
+                .tooltip_value_color(move |p, v| chart_tooltip_color(p, 0, v, tooltip_color));
+            if node
+                .collection()
+                .iter()
+                .any(|i| i.tooltip_content.is_some())
+            {
+                chart = chart.tooltip_content(chart_tooltip_content);
+            }
+            if let Some([min, max]) = node.y_domain {
+                chart = chart.y_domain(min, max);
+            }
+            if let Some(n) = node.point_count {
+                chart = chart.point_count(n);
+            }
+            if let Some(v) = node.y_axis {
+                chart = chart.y_axis(v);
+            }
+            if let Some(v) = &node.y_axis_label_placement {
+                chart = chart.y_axis_label_placement(axis_label_placement(v));
+            }
+            if let Some(n) = node.y_tick_count {
+                chart = chart.y_tick_count(n);
+            }
+            if let Some(n) = node.x_tick_count {
+                chart = chart.x_tick_count(n);
+            }
+            if let Some(n) = node.grid_columns {
+                chart = chart.grid_columns(n);
+            }
+            if let Some(v) = node.grid_dashed {
+                chart = chart.grid_dashed(v);
+            }
+            if let Some(v) = node.y_tick_format.clone() {
+                chart = chart.y_tick_format(move |n| format_chart_tick(n, &v));
+            }
+            if let Some([top, bottom]) = node.y_padding {
+                chart = chart.y_padding(top, bottom);
+            }
+            for value in &node.reference_lines {
+                chart = chart.reference_line(*value);
             }
             chart.into_any_element()
         }
@@ -2513,6 +2711,14 @@ fn markdown_extensions(node: &Node, key: &str) -> MarkdownExtensions {
 }
 
 pub fn paint_markdown(node: &Node, key: &str) -> gpui::AnyElement {
+    paint_markdown_with_state(node, key, None)
+}
+
+pub fn paint_markdown_with_state(
+    node: &Node,
+    key: &str,
+    state: Option<&Entity<gpui_component::text::TextViewState>>,
+) -> gpui::AnyElement {
     let body = node
         .text
         .clone()
@@ -2525,7 +2731,9 @@ pub fn paint_markdown(node: &Node, key: &str) -> gpui::AnyElement {
         .as_deref()
         == Some("html")
         || node.kind == "html";
-    let mut view = if html {
+    let mut view = if let Some(state) = state {
+        TextView::new(state)
+    } else if html {
         TextView::html(SharedString::from(key.to_string()), body)
     } else {
         TextView::markdown(SharedString::from(key.to_string()), body)
@@ -2582,6 +2790,10 @@ pub fn paint_markdown(node: &Node, key: &str) -> gpui::AnyElement {
                 cx,
             );
         });
+    }
+    if node.on_reveal.is_some() {
+        let key = key.to_string();
+        view=view.on_reveal(move |bounds,window,cx| crate::renderer::window_action_emitter(window,cx)(crate::overlay::QueuedAction::WidgetValue {key:key.clone(),event:"reveal".into(),value:json!({"x":f32::from(bounds.origin.x),"y":f32::from(bounds.origin.y),"width":f32::from(bounds.size.width),"height":f32::from(bounds.size.height)})},cx));
     }
     view.into_any_element()
 }
@@ -3052,6 +3264,15 @@ pub fn settings_pages(node: &Node, cmd_tx: &mpsc::Sender<Cmd>) -> Vec<SettingPag
                 if let Some(description) = &group.description {
                     setting_group = setting_group.description(description.clone());
                 }
+                if let Some(variant) = &group.variant {
+                    setting_group =
+                        setting_group.variant(mapping::parse_group_variant(Some(variant)));
+                }
+                if let Some(footer) = &group.footer {
+                    let footer = footer.clone();
+                    setting_group =
+                        setting_group.footer(move |_, _| protocol::Content::Node(footer.clone()));
+                }
                 for field in group.items {
                     setting_group = setting_group.item(settings_field(&field, cmd_tx, node));
                 }
@@ -3330,6 +3551,63 @@ pub fn sync_input_text(
             input.set_value(wanted.to_string(), window, cx);
         });
     }
+}
+
+fn axis_label_placement(value: &str) -> gpui_component::plot::AxisLabelPlacement {
+    if value == "inside" {
+        gpui_component::plot::AxisLabelPlacement::Inside
+    } else {
+        gpui_component::plot::AxisLabelPlacement::Outside
+    }
+}
+fn format_chart_tick(value: f64, format: &Value) -> String {
+    let precision = format
+        .get("precision")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(12) as usize;
+    let scale = format
+        .get("scale")
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite())
+        .unwrap_or(1.);
+    format!(
+        "{}{:.*}{}",
+        format.get("prefix").and_then(Value::as_str).unwrap_or(""),
+        precision,
+        value * scale,
+        format.get("suffix").and_then(Value::as_str).unwrap_or("")
+    )
+}
+fn chart_tooltip_title(point: &ChartPoint) -> SharedString {
+    point
+        .tooltip_title
+        .clone()
+        .unwrap_or_else(|| point.label.clone())
+        .into()
+}
+fn tooltip_row(value: Option<&Value>, index: usize) -> Option<&str> {
+    value
+        .and_then(|v| if v.is_array() { v.get(index) } else { Some(v) })
+        .and_then(Value::as_str)
+}
+fn chart_tooltip_value(point: &ChartPoint, index: usize, value: f64) -> SharedString {
+    tooltip_row(point.tooltip_value.as_ref(), index)
+        .map(str::to_string)
+        .unwrap_or_else(|| format_chart_number(value))
+        .into()
+}
+fn chart_tooltip_color(point: &ChartPoint, index: usize, _: f64, fallback: Hsla) -> Hsla {
+    tooltip_row(point.tooltip_value_color.as_ref(), index)
+        .and_then(parse_hex_color)
+        .unwrap_or(fallback)
+}
+fn chart_tooltip_content(point: &ChartPoint, _: &mut Window, _: &mut App) -> AnyElement {
+    point
+        .tooltip_content
+        .as_ref()
+        .map(|n| protocol::Content::Node(n.clone()).into_any_element())
+        .unwrap_or_else(|| div().child(chart_tooltip_title(point)).into_any_element())
 }
 
 #[cfg(test)]

@@ -23,8 +23,9 @@ and joined emoji. `:font-class` is the string `"proportional"` or
 
 ## Platform support
 
-The binding uses the published GPUI 0.3.6 `App::on_missing_glyphs` API.
-Its platform support is narrower than the callback's availability:
+The binding uses the published `App::on_missing_glyphs` API. The support
+audit below was recorded for GPUI 0.3.6; the host now uses 0.3.7. Its
+platform support can be narrower than the callback's availability:
 
 | Text backend in GPUI 0.3.6 | Emits reports |
 |---|---|

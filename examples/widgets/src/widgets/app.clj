@@ -1079,8 +1079,42 @@
                             :right [(ui/kbd "ctrl-k") (ui/label "UTF-8")]}
                            (ui/label (or (ui/format-option-id command-pick) "Ready"))))))
 
+(defn- kit-070-panel [state]
+  (ui/vstack {:gap 24}
+             (example "Toolbar" "Use Left/Right to move between commands."
+                      (ui/toolbar {:id "new-toolbar"}
+                                  (ui/toolbar-group {:label "Document"}
+                                                    (ui/button "New" {:on-click #(swap! !state update :tick inc)})
+                                                    (ui/button "Save" {:on-click #(swap! !state update :tick inc)}))
+                                  (ui/label (str "Actions: " (:tick state)))))
+             (example "Time and date" "Segmented time controls also work inside DatePicker."
+                      (ui/time-field (:meeting-time state "14:30")
+                                     {:id "meeting-time" :hour-cycle :h12 :on-change (set-key :meeting-time)})
+                      (ui/date-picker (:meeting-date state "2026-09-28T14:30")
+                                      {:id "meeting-date" :time-precision :minute
+                                       :date-format "%Y-%m-%d %H:%M" :on-change (set-key :meeting-date)}))
+             (example "Questionnaire" "Native validation, choices, freeform input and navigation."
+                      (ui/questionnaire {:id "new-survey" :shortcuts :numbers
+                                         :questions [{:id :language :label "Favorite language?" :required true
+                                                      :choices [{:id :clj :label "Clojure"} {:id :rust :label "Rust"}]}
+                                                     {:id :notes :label "Anything else?" :input {:placeholder "Optional notes"}}]
+                                         :on-submit (set-key :survey-result)})
+                      (ui/label (pr-str (:survey-result state))))
+             (example "Markdown search" "Highlights address rendered text across formatting."
+                      (ui/markdown "Search **across formatting** and across formatting again."
+                                   {:id "new-md" :height 120 :search {:query "across formatting" :color "#6b4b20"}}))
+             (example "Stable live chart" "Fixed domains, reserved points, reference lines and custom ticks."
+                      (ui/line-chart [{:label "Mon" :value 20} {:label "Tue" :value 65} {:label "Wed" :value 48}]
+                                     {:id "new-chart" :height 180 :interactive true :y-domain [0 100]
+                                      :point-count 7 :y-axis true :reference-lines [50] :grid-dashed true
+                                      :y-tick-format {:suffix "%"} :tooltip-value #(str (:value %) "%")}))))
+
 (def ^:private pages
-  [{:id :controls
+  [{:id :kit-070
+    :label "New in 0.7"
+    :description "Toolbar, Questionnaire, TimeField and richer charts and text."
+    :panels [kit-070-panel]}
+   {:id :controls
     :label "Buttons & toggles"
     :description "Start with actions and boolean controls."
     :panels [controls-panel]}

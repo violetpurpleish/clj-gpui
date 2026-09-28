@@ -2225,3 +2225,47 @@
     (runtime/invoke-callback! (get-in wire [:children 1 :on-change]) ["file" "new"])
     (runtime/invoke-callback! (get-in wire [:children 2 :initial-content :on-click]))
     (is (= [:ready [:file :new] :start] @seen))))
+
+(deftest kit-070-components-normalize-and-export-callbacks
+  (let [seen (atom [])
+        tree (runtime/export-tree
+              (ui/window
+               (ui/toolbar {:id "tools" :size :small}
+                           (ui/toolbar-group {:label "Edit"} (ui/button "Save")))
+               (ui/time-field "13:05:09" {:id "time" :time-precision :second :hour-cycle :h12
+                                          :on-change #(swap! seen conj %)})
+               (ui/questionnaire {:id "survey" :current-item :language :shortcuts :numbers
+                                  :questions [{:id :language :label "Language" :required true
+                                               :choices [{:id :clj :label "Clojure"}]}]
+                                  :answers {:language {:choices [:clj]}}
+                                  :on-submit #(swap! seen conj %)})
+               (ui/select :clj {:options [:clj] :on-dismiss #(swap! seen conj :dismiss)})
+               (ui/attachment {:id "file" :progress 40 :on-remove #(swap! seen conj :remove)
+                               :on-retry #(swap! seen conj :retry)})))
+        children (:children tree)]
+    (is (= "small" (:control-size (first children))))
+    (is (= "Edit" (get-in children [0 :children 0 :accessibility-label])))
+    (is (= "language" (get-in children [2 :questions 0 :id])))
+    (is (= ["clj"] (get-in children [2 :answers "language" :choices])))
+    (runtime/invoke-callback! (:on-change (nth children 1)) "14:00:01")
+    (runtime/invoke-callback! (:on-dismiss (nth children 3)))
+    (runtime/invoke-callback! (:on-remove (nth children 4)))
+    (runtime/invoke-callback! (:on-retry (nth children 4)))
+    (is (= ["14:00:01" :dismiss :remove :retry] @seen))))
+
+(deftest kit-070-chart-formatters-run-in-clojure-and-content-keeps-callbacks
+  (let [seen (atom 0)
+        chart (ui/line-chart [{:label "Monday" :value 20}]
+                             {:y-domain [0 100] :point-count 7 :y-axis true
+                              :reference-lines [50] :grid-dashed false
+                              :tooltip-title #(str "Day: " (:label %))
+                              :tooltip-value #(str (:value %) "%")
+                              :tooltip-content (fn [_] (ui/button "Inspect" {:disabled nil :on-click #(swap! seen inc)}))})
+        wire (runtime/export-tree chart)]
+    (is (= "Day: Monday" (get-in wire [:items 0 :tooltip-title])))
+    (is (= "20%" (get-in wire [:items 0 :tooltip-value])))
+    (is (= [0 100] (:y-domain wire)))
+    (is (false? (:grid-dashed wire)))
+    (is (false? (get-in wire [:items 0 :tooltip-content :disabled])))
+    (runtime/invoke-callback! (get-in wire [:items 0 :tooltip-content :on-click]))
+    (is (= 1 @seen))))

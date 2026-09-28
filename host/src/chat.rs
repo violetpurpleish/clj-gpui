@@ -516,6 +516,12 @@ fn render_message<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> Message
     if let Some((child, child_path)) = header {
         msg = msg.header(render_message_header(p, child, &child_path));
     }
+    if let Some(id) = node.id.clone() {
+        msg = msg.id(id);
+    }
+    if let Some(role) = parse_marker_role(node.role.as_deref()) {
+        msg = msg.role(role);
+    }
     let mut content = MessageContent::new();
     let mut has_content = false;
     for (child, child_path) in content_nodes {
@@ -723,6 +729,34 @@ fn render_attachment<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> Atta
             });
         });
     }
+    if let Some(percent) = node.progress {
+        attachment = attachment.progress(percent);
+    }
+    if let Some(tooltip) = node.tooltip.clone() {
+        attachment = attachment.tooltip(tooltip);
+    }
+    if let Some(callback) = node.on_remove.clone()
+        && let Some(tx) = p.cmd_tx()
+    {
+        attachment = attachment.on_remove(move |_, _, _| {
+            let _ = tx.send(Cmd::Callback {
+                id: callback.clone(),
+                value: None,
+                seq: None,
+            });
+        });
+    }
+    if let Some(callback) = node.on_retry.clone()
+        && let Some(tx) = p.cmd_tx()
+    {
+        attachment = attachment.on_retry(move |_, _, _| {
+            let _ = tx.send(Cmd::Callback {
+                id: callback.clone(),
+                value: None,
+                seq: None,
+            });
+        });
+    }
     let mut media = None;
     let mut content = None;
     let mut actions = None;
@@ -866,6 +900,13 @@ fn render_attachment_group<P: NodePainter>(p: &mut P, node: &Node, path: &str) -
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| path.to_string());
     let mut group = AttachmentGroup::new(id);
+    if let Some(color) = node
+        .edge_fade
+        .as_deref()
+        .and_then(crate::extra::parse_hex_color)
+    {
+        group = group.with_edge_fade(color);
+    }
     for (index, child) in node.children.iter().enumerate() {
         group = group.child(paint_child(p, child, &child_path(path, index)));
     }
@@ -874,6 +915,11 @@ fn render_attachment_group<P: NodePainter>(p: &mut P, node: &Node, path: &str) -
 
 fn render_marker<P: NodePainter>(p: &mut P, node: &Node, path: &str) -> Marker {
     let mut marker = Marker::new()
+        .alignment(match node.alignment.as_deref() {
+            Some("center") => gpui_component::marker::MarkerAlignment::Center,
+            Some("end") => gpui_component::marker::MarkerAlignment::End,
+            _ => gpui_component::marker::MarkerAlignment::Start,
+        })
         .with_variant(parse_marker_variant(node.variant.as_deref()))
         .loading(node.loading)
         .with_loading_style(parse_marker_loading_style(node.loading_style.as_deref()));

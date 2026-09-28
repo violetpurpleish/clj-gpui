@@ -439,6 +439,12 @@
       (cond-> {:id (wire-id id)
                :label (when (some? label) (str label))}
         (and (some? value) scalar-value?) (assoc :text (str value))
+        (contains? x :tooltip-title) (assoc :tooltip-title (:tooltip-title x))
+        (contains? x :tooltip-value) (assoc :tooltip-value (:tooltip-value x))
+        (contains? x :tooltip-value-color) (assoc :tooltip-value-color (:tooltip-value-color x))
+        (contains? x :tooltip-content) (assoc :tooltip-content (:tooltip-content x))
+        (contains? x :label-color) (assoc :label-color (:label-color x))
+        (contains? x :accessibility-label) (assoc :accessibility-label (:accessibility-label x))
         (contains? x :text) (assoc :text (str (:text x)))
         (contains? x :disabled) (assoc :disabled (boolean-state (:disabled x)))
         (contains? x :separator) (assoc :separator (boolean-state (:separator x)))
@@ -1349,9 +1355,8 @@
   Kit Select chrome: `:cleanable`, `:title-prefix`, `:menu-width` /
   `:menu-max-h` (px), `:search-placeholder`, `:empty` (text or widget), `:icon`,
   `:appearance`, `:focus-ring` (Kit `FocusableExt`; omit = Kit true),
-  `:accessibility-label`. Kit 0.6.6's styled Select does not forward its
-  base dismiss event, so there is deliberately no `:on-dismiss`; selection
-  confirmation remains distinct from merely closing the menu. Group titles are not selectable and are not
+  `:accessibility-label`. `:on-dismiss` receives no arguments when an open menu closes, including
+  after :on-change on confirmation. Group titles are not selectable and are not
   in the callback id map. Items accept `:content` and a widget `:display`;
   groups accept a widget `:header`. `:empty` accepts text or a widget.
 
@@ -2832,6 +2837,16 @@
       (seq (:links opts)) (update :links option-items)
       (seq (:series opts)) (update :series option-items))))
 
+(defn- chart-presentation [points opts]
+  (mapv (fn [point]
+          (reduce (fn [point key]
+                    (if-let [f (when (fn? (get opts key)) (get opts key))]
+                      (assoc point key (f point))
+                      point))
+                  (if (map? point) point (option-item point))
+                  [:tooltip-title :tooltip-value :tooltip-value-color :tooltip-content :label-color]))
+        points))
+
 (defn chart
   "Series chart. `kind` is `:line` (default), `:bar`, `:area`, `:pie`,
   `:radar`, `:candlestick`, or `:sankey`.
@@ -2876,8 +2891,9 @@
   ([kind points opts]
    (merge-widget {:type :chart
                   :variant (if (keyword? kind) (name kind) (str (or kind "line")))
-                  :items (option-items (or points []))}
-                 (chart-opts opts))))
+                  :items (option-items (chart-presentation (or points []) opts))}
+                 (chart-opts (apply dissoc opts (filter #(fn? (get opts %))
+                                                        [:tooltip-title :tooltip-value :tooltip-value-color :tooltip-content :label-color]))))))
 
 (defn line-chart
   "See `chart` with `:line`. Kit default has no dots; pass `:dot true` to show them."
@@ -3951,3 +3967,137 @@
   [& args]
   (let [[opts children] (split-style-children args)]
     (merge-widget {:type :sidebar-toggle-button :children (flatten-children children)} opts)))
+
+(defn toolbar
+  "Native command toolbar with wrapping Left/Right focus navigation.
+  Controls inherit :size (default :small); buttons receive compact ghost
+  styling. :disabled disables toolbar navigation; controls retain their own
+  :disabled flags. Labels, separators and spacers keep source order."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :toolbar :children (flatten-children children)} opts)))
+
+(defn toolbar-group
+  "Semantic toolbar subgroup. :label or :accessibility-label names the group."
+  [& args]
+  (let [[opts children] (split-style-children args)]
+    (merge-widget {:type :toolbar-group :children (flatten-children children)}
+                  (cond-> opts (:label opts) (assoc :accessibility-label (str (:label opts)))))))
+
+(defn time-field
+  "Segmented native time editor. Value and :on-change use HH:mm, or HH:mm:ss
+  with :time-precision :second. :hour-cycle is :h23 (default) or :h12;
+  the wire value always uses 24-hour time. Supports :disabled, :invalid,
+  :focus and control :size."
+  ([value] (time-field value {}))
+  ([value opts] (merge-widget {:type :time-field :value value} opts)))
+
+(defn- questionnaire-question [question]
+  (-> question
+      (update :id wire-id)
+      (update :label #(str (or % (:id question))))
+      (update :choices #(mapv (fn [choice]
+                                (let [choice (if (map? choice) choice {:id choice :label (str choice)})]
+                                  (-> choice
+                                      (update :id wire-id)
+                                      (update :label (fn [label] (str (or label (:id choice)))))))) %))))
+
+(defn questionnaire
+  "Native questionnaire with choices, freeform inputs, validation and navigation.
+  :questions is a vector of {:id :label :description :required :multiple
+  :disabled :choices [{:id :label :description :disabled :selected}]
+  :input {:label :placeholder :disabled}}. Optional :pattern and
+  :validation-message validate freeform answers in the host.
+  :answers maps question ids to {:choices [ids] :freeform text}.
+  :current-item selects a question; :shortcuts is :letters or :numbers.
+  :on-change receives {:item :answer :status}; :on-current-change receives
+  {:previous :current}; :on-submit and :on-complete receive ordered vectors
+  of {:item :answer :status}. IDs in these snapshots are wire strings.
+  :questionnaire-errors maps ids to error messages; :questionnaire-action
+  is {:action :next|:previous|:skip|:submit|:reset :generation n}.
+  Without children, supplies the standard native parts automatically."
+  [opts & children]
+  (let [opts (cond-> opts
+               (contains? opts :questions) (update :questions #(mapv questionnaire-question %))
+               (some? (:current-item opts)) (update :current-item wire-id)
+               (map? (:questionnaire-errors opts)) (update :questionnaire-errors #(into {} (map (fn [[k v]] [(wire-id k) v])) %))
+               (map? (:answers opts)) (update :answers #(into {} (for [[k v] %]
+                                                                   [(wire-id k) (update v :choices (fn [xs] (mapv wire-id xs)))]))))]
+    (merge-widget {:type :questionnaire :children (flatten-children children)} opts)))
+
+(defn- questionnaire-part [kind args]
+  (let [[opts children] (split-style-children args)
+        opts (cond-> opts
+               (some? (:question opts)) (update :question wire-id)
+               (some? (:value opts)) (update :value wire-id))]
+    (merge-widget {:type kind :children (flatten-children children)} opts)))
+
+(defn questionnaire-progress
+  "Native Questionnaire progress part; :question selects its question id."
+  [& args]
+  (questionnaire-part :questionnaire-progress args))
+
+(defn questionnaire-item
+  "Native Questionnaire item part; :question selects its question id."
+  [& args]
+  (questionnaire-part :questionnaire-item args))
+
+(defn questionnaire-title
+  "Native Questionnaire title part; :question selects its question id."
+  [& args]
+  (questionnaire-part :questionnaire-title args))
+
+(defn questionnaire-description
+  "Native Questionnaire description part; :question selects its question id."
+  [& args]
+  (questionnaire-part :questionnaire-description args))
+
+(defn questionnaire-choices
+  "Native Questionnaire choices part; :question selects its question id."
+  [& args]
+  (questionnaire-part :questionnaire-choices args))
+
+(defn questionnaire-choice
+  "Native Questionnaire choice part; :question selects its question id."
+  [& args]
+  (questionnaire-part :questionnaire-choice args))
+
+(defn questionnaire-choice-description
+  "Native Questionnaire choice-description part; :question selects its question id."
+  [& args]
+  (questionnaire-part :questionnaire-choice-description args))
+
+(defn questionnaire-input
+  "Native Questionnaire input part; :question selects its question id."
+  [& args]
+  (questionnaire-part :questionnaire-input args))
+
+(defn questionnaire-error
+  "Native Questionnaire error part; :question selects its question id."
+  [& args]
+  (questionnaire-part :questionnaire-error args))
+
+(defn questionnaire-previous
+  "Native Questionnaire previous part; :question selects its question id."
+  [& args]
+  (questionnaire-part :questionnaire-previous args))
+
+(defn questionnaire-next
+  "Native Questionnaire next part; :question selects its question id."
+  [& args]
+  (questionnaire-part :questionnaire-next args))
+
+(defn questionnaire-skip
+  "Native Questionnaire skip part; :question selects its question id."
+  [& args]
+  (questionnaire-part :questionnaire-skip args))
+
+(defn questionnaire-submit
+  "Native Questionnaire submit part; :question selects its question id."
+  [& args]
+  (questionnaire-part :questionnaire-submit args))
+
+(defn questionnaire-actions
+  "Native layout for Questionnaire previous, skip, next and submit parts."
+  [& args]
+  (questionnaire-part :questionnaire-actions args))

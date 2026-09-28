@@ -3507,3 +3507,266 @@ async fn textarea_native_growth_and_search_survive_tree_updates(cx: &mut TestApp
         .update(cx, |_, window, _| window.remove_window())
         .unwrap();
 }
+
+#[gpui_kit::test]
+async fn kit_070_time_and_questionnaire_keep_native_state_and_live_callbacks(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::component::time_field::TimeFieldEvent;
+    cx.update(gpui_kit::init);
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(800.), px(700.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let mut tree:Node=serde_json::from_value(json!({"type":"window","chrome":"app","children":[
+        {"type":"time-field","id":"time","value":"14:35:22","time-precision":"second","hour-cycle":"h12","on-change":"old-time"},
+        {"type":"date-picker","id":"appointment","value":"2026-09-28T14:35:22","time-precision":"second","on-change":"appointment-change"},
+        {"type":"questionnaire","id":"survey","questions":[{"id":"language","label":"Language","required":true,"choices":[{"id":"clj","label":"Clojure"},{"id":"rs","label":"Rust"}]},{"id":"notes","label":"Notes","input":{"placeholder":"Optional"}}],"on-change":"old-answer","on-submit":"submit"}
+    ]})).unwrap();
+    event_tx
+        .send(HostEvent::tree(tree.clone(), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let view = production_view(handle, cx);
+    let time = view.read_with(cx, |v, _| v.test_time_state("time").unwrap());
+    let questionnaire = view.read_with(cx, |v, _| v.test_questionnaire_state("survey").unwrap());
+    let date = view.read_with(cx, |v, _| v.test_date_state("appointment").unwrap());
+    assert_eq!(
+        time.read_with(cx, |s, _| s.time().format("%H:%M:%S").to_string()),
+        "14:35:22"
+    );
+    assert_eq!(
+        date.read_with(cx, |s, _| s
+            .date_time()
+            .format("%Y-%m-%dT%H:%M:%S")
+            .unwrap()
+            .to_string()),
+        "2026-09-28T14:35:22"
+    );
+    cx.update_window(handle.into(), |_, window, cx| {
+        questionnaire.update(cx, |s, cx| {
+            assert!(!s.go_next(window, cx), "required answer blocks navigation");
+            s.activate_choice("language", "clj", cx).unwrap();
+            assert!(s.go_next(window, cx));
+            assert_eq!(s.current_item().unwrap().as_ref(), "notes");
+        });
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let seq = callback_sequence(&drain(&cmd_rx));
+    tree.children[0].on_change = Some("new-time".into());
+    tree.children[0].value = Some(json!("09:10:11"));
+    tree.children[2].on_change = Some("new-answer".into());
+    event_tx
+        .send(HostEvent::tree(tree.clone(), seq, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        time.entity_id(),
+        view.read_with(cx, |v, _| v.test_time_state("time").unwrap().entity_id())
+    );
+    assert_eq!(
+        questionnaire.entity_id(),
+        view.read_with(cx, |v, _| v
+            .test_questionnaire_state("survey")
+            .unwrap()
+            .entity_id())
+    );
+    assert_eq!(
+        questionnaire.read_with(cx, |s, _| s.current_item().unwrap().to_string()),
+        "notes"
+    );
+    assert!(
+        callback_pairs(&drain(&cmd_rx)).is_empty(),
+        "controlled time update is silent"
+    );
+    time.update(cx, |s, cx| cx.emit(TimeFieldEvent::Change(s.time())));
+    cx.run_until_parked();
+    let commands = drain(&cmd_rx);
+    assert!(callback_pairs(&commands).contains(&("new-time".into(), Some(json!("09:10:11")))));
+    event_tx
+        .send(HostEvent::tree(
+            tree.clone(),
+            callback_sequence(&commands),
+            vec![],
+        ))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    drain(&cmd_rx);
+    questionnaire.update(cx, |s, cx| s.activate_choice("language", "rs", cx).unwrap());
+    cx.run_until_parked();
+    let calls = callback_pairs(&drain(&cmd_rx));
+    assert!(
+        calls.iter().any(|(id, v)| id == "new-answer"
+            && v.as_ref().unwrap()["answer"]["choices"] == json!(["rs"]))
+    );
+    tree.children.clear();
+    event_tx
+        .send(HostEvent::tree(tree, None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert!(
+        view.read_with(cx, |v, _| v.test_time_state("time").is_none()
+            && v.test_questionnaire_state("survey").is_none())
+    );
+}
+
+#[gpui_kit::test]
+async fn kit_070_inline_tokens_range_decorations_and_markdown_search(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        syntax::init(cx);
+    });
+    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(800.), px(650.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let mut tree:Node=serde_json::from_value(json!({"type":"window","chrome":"app","children":[
+        {"type":"input","id":"tokens","text":"Hi @Ada!","tokens":[{"id":"ada","text":"@Ada","range":[3,7]}]},
+        {"type":"textarea","id":"draft","text":"@Ada\nhello","height":80,"tokens":[{"id":"ada","text":"@Ada","range":[0,4]}]},
+        {"type":"editor","id":"range-editor","text":"héllo","height":100,"range-decorations":[{"range":[2,4],"style":"fill","color":"#ffff00"}]},
+        {"type":"markdown","id":"search-md","text":"Hello **world**. Hello again.","height":160,"search":{"query":"Hello","color":"#ffff00"},"reveal-range":[0,5]},
+        {"type":"dialog","id":"token-dialog","open":true,"children":[{"type":"input","id":"dialog-token","text":"@Ada","tokens":[{"id":"ada","text":"@Ada","range":[0,4]}],"token-style":{"bg":"#ffff00"}}]}
+    ]})).unwrap();
+    event_tx
+        .send(HostEvent::tree(tree.clone(), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let view = production_view(handle, cx);
+    let input = view.read_with(cx, |v, _| v.test_input_state("tokens").unwrap());
+    let textarea = view.read_with(cx, |v, _| v.test_textarea_state("draft").unwrap());
+    let markdown = view.read_with(cx, |v, _| v.test_markdown_state("search-md").unwrap());
+    assert_eq!(input.read_with(cx, |s, _| s.tokens()[0].range()), 3..7);
+    assert_eq!(textarea.read_with(cx, |s, _| s.tokens()[0].range()), 0..4);
+    let dialog_key = crate::overlay::dialog_input_key(
+        "token-dialog",
+        &tree.children[4].children[0],
+        "token-dialog/content-0",
+    );
+    let dialog_input = view.read_with(cx, |v, _| v.test_input_state(&dialog_key).unwrap());
+    assert_eq!(
+        dialog_input.read_with(cx, |s, _| s.tokens()[0].range()),
+        0..4
+    );
+    assert_eq!(
+        view.read_with(cx, |v, cx| v
+            .test_range_decoration_ranges("range-editor", cx)),
+        vec![1..4]
+    );
+    assert!(markdown.read_with(cx, |s, _| {
+        s.rendered_text().as_str().contains("Hello world")
+    }));
+    tree.children[0].token_insert =
+        Some(json!({"id":"grace","text":"@Grace","range":[3,7],"generation":1}));
+    event_tx
+        .send(HostEvent::tree(tree.clone(), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        input.read_with(cx, |s, _| s.value().to_string()),
+        "Hi @Grace!"
+    );
+    tree.children[0].text = Some("Hi @Grace!".into());
+    tree.children[0].tokens = vec![json!({"id":"grace","text":"@Grace","range":[3,9]})];
+    tree.children[2].range_decorations.clear();
+    tree.children[3].text = Some("Hello **world**. Hello again. More.".into());
+    event_tx
+        .send(HostEvent::tree(tree, None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        input.read_with(cx, |s, _| s.tokens().len()),
+        1,
+        "insertion must not replay on rerender"
+    );
+    assert_eq!(
+        markdown.entity_id(),
+        view.read_with(cx, |v, _| v
+            .test_markdown_state("search-md")
+            .unwrap()
+            .entity_id())
+    );
+    assert!(
+        view.read_with(cx, |v, cx| v
+            .test_range_decoration_ranges("range-editor", cx))
+            .is_empty()
+    );
+}
+
+#[gpui_kit::test]
+async fn kit_070_toolbar_navigation_and_select_dismissal(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(700.), px(450.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let tree:Node=serde_json::from_value(json!({"type":"window","chrome":"app","children":[
+        {"type":"toolbar","id":"tools","children":[{"type":"button","id":"first","text":"First"},{"type":"button","id":"disabled","text":"Disabled","disabled":true},{"type":"button","id":"last","text":"Last"}]},
+        {"type":"select","id":"language","value":"clj","on-change":"change","on-dismiss":"dismiss","options":[{"id":"clj","label":"Clojure"},{"id":"rs","label":"Rust"}]}
+    ]})).unwrap();
+    event_tx
+        .send(HostEvent::tree(tree.clone(), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    drain(&cmd_rx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.blur(cx);
+        window.focus_next(cx);
+    })
+    .unwrap();
+    settle_root(handle, cx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        assert_eq!(window.find("first").focused(), Some(true));
+        window.press("right", cx);
+    })
+    .unwrap();
+    settle_root(handle, cx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        assert_eq!(window.find("last").focused(), Some(true));
+        window.press("right", cx);
+    })
+    .unwrap();
+    settle_root(handle, cx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        assert_eq!(window.find("first").focused(), Some(true));
+        window.within("language").click("input", cx);
+    })
+    .unwrap();
+    settle_root(handle, cx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.press("down", cx);
+        window.press("enter", cx);
+    })
+    .unwrap();
+    settle_root(handle, cx);
+    let first = drain(&cmd_rx);
+    let mut calls = callback_pairs(&first);
+    event_tx
+        .send(HostEvent::tree(tree, callback_sequence(&first), vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    calls.extend(callback_pairs(&drain(&cmd_rx)));
+    assert_eq!(
+        calls,
+        vec![
+            ("change".into(), Some(json!("rs"))),
+            ("dismiss".into(), None)
+        ],
+        "Confirm must precede Dismiss across the callback acknowledgement barrier"
+    );
+}

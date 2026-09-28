@@ -734,6 +734,18 @@ impl<'de> Deserialize<'de> for TableCell {
 /// Collection item for radios, select, tabs, breadcrumbs, accordion, etc.
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 pub struct Item {
+    #[serde(default, rename = "tooltip-title")]
+    pub tooltip_title: Option<String>,
+    #[serde(default, rename = "tooltip-value")]
+    pub tooltip_value: Option<Value>,
+    #[serde(default, rename = "tooltip-value-color")]
+    pub tooltip_value_color: Option<Value>,
+    #[serde(default, rename = "tooltip-content")]
+    pub tooltip_content: Option<Box<Node>>,
+    #[serde(default, rename = "label-color")]
+    pub label_color: Option<String>,
+    #[serde(default, rename = "accessibility-label")]
+    pub accessibility_label: Option<String>,
     #[serde(default, rename = "source-range")]
     pub source_range: Option<[usize; 2]>,
     #[serde(default, rename = "source-pattern")]
@@ -1042,6 +1054,111 @@ impl Content {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 pub struct Node {
+    #[serde(default, rename = "scroll-offset")]
+    pub scroll_offset: Option<[f32; 2]>,
+    #[serde(default)]
+    pub offset: Option<f32>,
+    #[serde(default, rename = "time-precision")]
+    pub time_precision: Option<String>,
+    #[serde(default, rename = "hour-cycle")]
+    pub hour_cycle: Option<String>,
+    #[serde(default, rename = "default-time")]
+    pub default_time: Option<String>,
+    #[serde(default, rename = "questions")]
+    pub questions: Vec<Value>,
+    #[serde(default, rename = "answers")]
+    pub answers: Option<Value>,
+    #[serde(default, rename = "current-item")]
+    pub current_item: Option<String>,
+    #[serde(default, rename = "shortcuts")]
+    pub shortcuts: Option<String>,
+    #[serde(default, rename = "question")]
+    pub question: Option<String>,
+    #[serde(default, rename = "on-current-change")]
+    pub on_current_change: Option<String>,
+    #[serde(default, rename = "on-complete")]
+    pub on_complete: Option<String>,
+    #[serde(default, rename = "on-remove")]
+    pub on_remove: Option<String>,
+    #[serde(default, rename = "on-retry")]
+    pub on_retry: Option<String>,
+    #[serde(default, rename = "on-dismiss")]
+    pub on_dismiss: Option<String>,
+    #[serde(default, rename = "on-token-click")]
+    pub on_token_click: Option<String>,
+    #[serde(default, rename = "on-content-change")]
+    pub on_content_change: Option<String>,
+    #[serde(default, rename = "on-reveal")]
+    pub on_reveal: Option<String>,
+    #[serde(default, rename = "on-text-state")]
+    pub on_text_state: Option<String>,
+    #[serde(default, rename = "tokens")]
+    pub tokens: Vec<Value>,
+    #[serde(default, rename = "token-insert")]
+    pub token_insert: Option<Value>,
+    #[serde(default, rename = "token-style")]
+    pub token_style: Option<Box<Node>>,
+    #[serde(default, rename = "indicator-style")]
+    pub indicator_style: Option<Box<Node>>,
+    #[serde(default, rename = "shortcut-style")]
+    pub shortcut_style: Option<Box<Node>>,
+    #[serde(default, rename = "range-decorations")]
+    pub range_decorations: Vec<Value>,
+    #[serde(default, rename = "range-highlights")]
+    pub range_highlights: Vec<Value>,
+    #[serde(default, rename = "reveal-range")]
+    pub reveal_range: Option<[usize; 2]>,
+    #[serde(default, rename = "reveal-generation")]
+    pub reveal_generation: Option<Value>,
+    #[serde(default, rename = "questionnaire-action")]
+    pub questionnaire_action: Option<Value>,
+    #[serde(default, rename = "questionnaire-errors")]
+    pub questionnaire_errors: Option<Value>,
+    #[serde(default, rename = "progress")]
+    pub progress: Option<f32>,
+    #[serde(default, rename = "edge-fade")]
+    pub edge_fade: Option<String>,
+    #[serde(default, rename = "arrow")]
+    pub arrow: Option<bool>,
+    #[serde(default, rename = "y-axis")]
+    pub y_axis: Option<bool>,
+    #[serde(default, rename = "grid-dashed")]
+    pub grid_dashed: Option<bool>,
+    #[serde(default, rename = "y-domain")]
+    pub y_domain: Option<[f64; 2]>,
+    #[serde(default, rename = "point-count")]
+    pub point_count: Option<usize>,
+    #[serde(default, rename = "band-count")]
+    pub band_count: Option<usize>,
+    #[serde(default, rename = "y-tick-count")]
+    pub y_tick_count: Option<usize>,
+    #[serde(default, rename = "x-tick-count")]
+    pub x_tick_count: Option<usize>,
+    #[serde(default, rename = "band-tick-count")]
+    pub band_tick_count: Option<usize>,
+    #[serde(default, rename = "grid-columns")]
+    pub grid_columns: Option<usize>,
+    #[serde(default, rename = "y-axis-label-placement")]
+    pub y_axis_label_placement: Option<String>,
+    #[serde(default, rename = "value-axis-label-placement")]
+    pub value_axis_label_placement: Option<String>,
+    #[serde(default, rename = "y-tick-format")]
+    pub y_tick_format: Option<Value>,
+    #[serde(default, rename = "value-tick-format")]
+    pub value_tick_format: Option<Value>,
+    #[serde(default, rename = "reference-lines")]
+    pub reference_lines: Vec<f64>,
+    #[serde(default, rename = "y-padding")]
+    pub y_padding: Option<[f32; 2]>,
+    #[serde(default, rename = "padding-inner")]
+    pub padding_inner: Option<f32>,
+    #[serde(default, rename = "padding-outer")]
+    pub padding_outer: Option<f32>,
+    #[serde(default, rename = "min-length")]
+    pub min_length: Option<f32>,
+    #[serde(default, rename = "max-band-width")]
+    pub max_band_width: Option<f32>,
+
     /// Root window's opt-in, application-wide font fallback diagnostics.
     #[serde(default, rename = "on-missing-glyphs")]
     pub on_missing_glyphs: Option<String>,
@@ -2216,10 +2333,15 @@ fn item_contains(item: &Item, needle: &str) -> bool {
             .content
             .as_ref()
             .is_some_and(|node| node.contains_text(needle))
-        || [&item.header, &item.footer, &item.display_content]
-            .into_iter()
-            .flatten()
-            .any(|node| node.contains_text(needle))
+        || [
+            &item.header,
+            &item.footer,
+            &item.display_content,
+            &item.tooltip_content,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|node| node.contains_text(needle))
         || item.suffix.as_ref().is_some_and(|content| match content {
             Content::Text(text) => text.contains(needle),
             Content::Node(node) => node.contains_text(needle),

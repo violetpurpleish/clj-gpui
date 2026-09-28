@@ -606,6 +606,9 @@ impl RootView {
             .disabled(node.disabled)
             .selected(node.selected)
             .confirmed(node.checked.unwrap_or(false));
+        if let Some(label) = &node.accessibility_label {
+            el = el.accessibility_label(label.clone());
+        }
         if let Some(icon) = mapping::icon_from_parts(node.check_icon.as_deref(), None) {
             el = el.check_icon(icon);
         }
@@ -1034,12 +1037,17 @@ impl RootView {
                 match child.kind.as_str() {
                     "input" => {
                         let state = self.input_slot(&key, child, window, cx);
-                        group = group.input(mapping::apply_input_chrome(Input::new(&state), child));
+                        group = group.input(mapping::apply_input_chrome(
+                            super::text_070::input_tokens(Input::new(&state), child, &key),
+                            child,
+                        ));
                     }
                     "textarea" => {
                         let state = self.textarea_slot(&key, child, window, cx);
-                        group = group
-                            .input(mapping::apply_textarea_chrome(Textarea::new(&state), child));
+                        group = group.input(mapping::apply_textarea_chrome(
+                            super::text_070::textarea_tokens(Textarea::new(&state), child, &key),
+                            child,
+                        ));
                     }
                     "input-group-addon" => {
                         group = group.addon(self.input_group_addon(child, &path, window, cx))
@@ -1400,6 +1408,9 @@ impl RootView {
                 if let Some(callback) = &node.on_click {
                     button = button.on_click(self.click(callback.clone()));
                 }
+                if let Some(label) = &node.accessibility_label {
+                    button = button.accessibility_label(label.clone());
+                }
                 button.into_any_element()
             }
             "sidebar-group" => SidebarGroup::new(
@@ -1445,6 +1456,9 @@ impl RootView {
         if let Some(icon) = mapping::icon_from_parts(node.icon.as_deref(), node.icon_svg.as_deref())
         {
             item = item.icon(icon);
+        }
+        if let Some(label) = &node.accessibility_label {
+            item = item.accessibility_label(label.clone());
         }
         if let Some(suffix) = node.suffix.clone() {
             item = item.suffix(move |_, _| suffix.clone());

@@ -8,9 +8,11 @@ This is not a Clojure-like language, a Lisp-inspired DSL, or a toy interpreter. 
 
 There is no Clojars release yet. Depend on this repo with `:local/root` or a git SHA. GitHub Actions runs `./scripts/ci.sh` on Ubuntu and macOS (Rust unit plus production-renderer interaction tests, strict Clippy, Clojure tests, cljfmt, and the windowless socket protocol test). macOS additionally runs the explicit offscreen Metal pixel target.
 
-The host uses GPUI Kit 0.6.6 and GPUI 0.3.6. See the [migration notes](docs/gpui-kit-0.6.6-migration.md) for compatibility and validation details.
+The host uses GPUI Kit 0.7.0 and GPUI 0.3.7. See the [migration notes](docs/gpui-kit-0.7.0-migration.md) for compatibility and validation details.
 
-`ui/window` supports optional [`:on-missing-glyphs` font diagnostics](docs/font-diagnostics.md). GPUI 0.3.6 currently emits these reports on Linux; its macOS and Windows DirectWrite backends do not emit them.
+New in 0.7: `ui/toolbar`, `ui/questionnaire`, `ui/time-field`, date/time picking, atomic input tokens, Markdown search/reveal, and expanded chart controls. The [migration guide](docs/gpui-kit-0.7.0-migration.md) documents the new options and event shapes.
+
+`ui/window` supports optional [`:on-missing-glyphs` font diagnostics](docs/font-diagnostics.md). Delivery depends on the native text backend; the linked guide records the platform support audit.
 
 ![screenshot](https://i.imgur.com/gKXfCnx.png)
 

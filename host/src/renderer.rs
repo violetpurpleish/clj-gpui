@@ -2,6 +2,10 @@
 mod parity;
 #[path = "renderer/providers.rs"]
 mod providers;
+#[path = "renderer/release_070.rs"]
+mod release_070;
+#[path = "renderer/text_070.rs"]
+mod text_070;
 #[path = "renderer/text_options.rs"]
 mod text_options;
 use crate::action_bridge;
@@ -20,8 +24,8 @@ use gpui::{
     SharedString, Styled, Subscription, Window, canvas, div, prelude::*, px, size,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, FocusableExt as _, Icon, IconName, IndexPath, Root,
-    Sizable as _, TitleBar, WindowExt as _,
+    ActiveTheme as _, Disableable as _, FocusableExt as _, Icon, IconName, IndexPath, Sizable as _,
+    TitleBar, WindowExt as _,
     accordion::Accordion,
     alert::Alert,
     badge::Badge,
@@ -464,11 +468,14 @@ struct DateSlot {
     state: Entity<DatePickerState>,
     range: bool,
     first_day: Weekday,
+    time_precision: Option<String>,
     config: String,
     on_change: Option<String>,
 }
 
 struct DockSlot {
+    skin: Rc<DockSkin>,
+    close_button: bool,
     layout: Option<Value>,
     native_layout: Option<Value>,
     options: Option<Value>,
@@ -639,6 +646,8 @@ pub struct RootView {
     used_resizables: HashSet<String>,
     render_scroller: Option<overlay::ScrollerPaintContext>,
     parity: parity::State,
+    release: release_070::State,
+    text_070: text_070::State,
     dialogs: Vec<overlay::DialogSpec>,
     dialog_live: Rc<RefCell<Vec<overlay::DialogSpec>>>,
     dialog_inputs: Rc<RefCell<overlay::OverlayInputs>>,
@@ -1190,6 +1199,8 @@ impl RootView {
             used_resizables: HashSet::new(),
             render_scroller: None,
             parity: parity::State::default(),
+            release: release_070::State::default(),
+            text_070: text_070::State::default(),
             dialogs: Vec::new(),
             dialog_live: Rc::new(RefCell::new(Vec::new())),
             dialog_inputs: Rc::new(RefCell::new(HashMap::new())),
@@ -1616,6 +1627,7 @@ impl RootView {
             slot.on_change = node.on_change.clone();
         }
         self.parity.refresh_callbacks(key, node);
+        self.release.refresh_callbacks(key, node);
     }
 
     fn schedule_input_change_flush(
@@ -1695,6 +1707,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
         let state = self.input_state(key, node, window, cx);
+        self.sync_input_tokens(key, node, &state, window, cx);
         self.sync_text_selection(key, node, &state, cx);
         state
     }
@@ -1726,7 +1739,7 @@ impl RootView {
             let focused = state.read(cx).focus_handle(cx).is_focused(window);
             let desired = node.text.clone().unwrap_or_default();
             let current = state.read(cx).value().to_string();
-            if force || (!focused && !pending) {
+            if (force || (!focused && !pending)) && !self.text_070.pending_token_insert(key, node) {
                 slot.last_value = desired.clone();
                 if current != desired {
                     state.update(cx, |input, cx| {
@@ -2005,9 +2018,13 @@ impl RootView {
             });
             cx.subscribe(
                 &state,
-                move |this, _, event: &SelectEvent<SectionDelegate<SelectOpt>>, _cx| {
+                move |this, _, event: &SelectEvent<SectionDelegate<SelectOpt>>, cx| {
                     let SelectEvent::Confirm(value) = event;
                     emit_select_confirm(this, &key_owned, value.as_ref());
+                    let entity = cx.entity();
+                    cx.defer(move |cx| {
+                        entity.update(cx, |this, _| this.flush_callback_queue());
+                    });
                 },
             )
             .detach();
@@ -2019,14 +2036,44 @@ impl RootView {
             });
             cx.subscribe(
                 &state,
-                move |this, _, event: &SelectEvent<SearchableVec<SelectOpt>>, _cx| {
+                move |this, _, event: &SelectEvent<SearchableVec<SelectOpt>>, cx| {
                     let SelectEvent::Confirm(value) = event;
                     emit_select_confirm(this, &key_owned, value.as_ref());
+                    let entity = cx.entity();
+                    cx.defer(move |cx| {
+                        entity.update(cx, |this, _| this.flush_callback_queue());
+                    });
                 },
             )
             .detach();
             SelectStateHandle::Flat(state)
         };
+        let dismiss_key = key.to_string();
+        macro_rules! subscribe_dismiss {
+            ($state:expr) => {
+                cx.subscribe($state, move |this, _, _: &DismissEvent, cx| {
+                    this.callback_queue
+                        .push(overlay::QueuedAction::WidgetValue {
+                            key: dismiss_key.clone(),
+                            event: "dismiss".into(),
+                            value: Value::Null,
+                        });
+                    let entity = cx.entity();
+                    cx.defer(move |cx| {
+                        entity.update(cx, |this, _| this.flush_callback_queue());
+                    });
+                })
+                .detach();
+            };
+        }
+        match &handle {
+            SelectStateHandle::Flat(state) => {
+                subscribe_dismiss!(state);
+            }
+            SelectStateHandle::Grouped(state) => {
+                subscribe_dismiss!(state);
+            }
+        }
         self.selects.insert(
             key.to_string(),
             SelectSlot {
@@ -2252,7 +2299,10 @@ impl RootView {
                     slot.in_dialog = dialog.is_some();
                 }
                 apply_style(
-                    mapping::apply_input_chrome(Input::new(&state).id(eid(&key)), node),
+                    mapping::apply_input_chrome(
+                        text_070::input_tokens(Input::new(&state).id(eid(&key)), node, &key),
+                        node,
+                    ),
                     node,
                     cx,
                 )
@@ -2261,7 +2311,10 @@ impl RootView {
             "textarea" => {
                 let state = self.textarea_slot(&key, node, window, cx);
                 apply_style(
-                    mapping::apply_textarea_chrome(Textarea::new(&state), node),
+                    mapping::apply_textarea_chrome(
+                        text_070::textarea_tokens(Textarea::new(&state), node, &key),
+                        node,
+                    ),
                     node,
                     cx,
                 )
@@ -2336,6 +2389,7 @@ impl RootView {
             "number-input" => self.render_number_input(node, &key, window, cx),
             "otp-input" => self.render_otp_input(node, &key, window, cx),
             "color-picker" => self.render_color_picker(node, &key, window, cx),
+            "attachment-group" => self.render_attachment_group_070(node, path, &key, window, cx),
             "date-picker" => self.render_date_picker(node, &key, window, cx),
             "editor" => self.render_editor(node, &key, window, cx),
             "virtual-list" => self.render_virtual_list(node, &key, window, cx),
@@ -2354,7 +2408,7 @@ impl RootView {
                 node,
                 cx,
             )
-            .child(extra::paint_markdown(node, &key))
+            .child(self.render_markdown_070(node, &key, cx))
             .into_any_element(),
             "sidebar" => self.render_sidebar(node, &key, cx),
             "settings" => viewport_sized(
@@ -2387,7 +2441,6 @@ impl RootView {
             | "attachment-title"
             | "attachment-description"
             | "attachment-actions"
-            | "attachment-group"
             | "marker"
             | "marker-icon"
             | "marker-content" => chat::render_any(
@@ -2399,6 +2452,9 @@ impl RootView {
                 node,
                 path,
             ),
+            kind if release_070::is_kind(kind) => {
+                self.render_release_070(node, path, &key, window, cx)
+            }
             kind if parity::is_kind(kind) => self.render_parity(node, path, &key, window, cx),
             other => div()
                 .id(eid(&key))
@@ -2438,6 +2494,7 @@ impl RootView {
 
         if let Some(prev) = prev {
             *Theme::global_mut(cx) = prev;
+            Theme::sync_base(cx);
         }
         match scope {
             Some(applied) => ThemeScope::new(applied, element).into_any_element(),
@@ -2923,6 +2980,9 @@ impl RootView {
         }
         if let Some(style) = &node.content_style {
             box_ = box_.content_style(mapping::apply_styled(div(), style).style().clone());
+        }
+        if let Some(footer) = node.footer.clone() {
+            box_ = box_.footer(protocol::Content::Node(footer));
         }
         apply_style(box_, node, cx)
             .children(self.render_children(node, path, window, cx))
@@ -3665,6 +3725,12 @@ impl RootView {
                     overlay::paint_static(&content, emit.clone(), &content_path, Some(cx))
                 }
             });
+        if let Some(arrow) = node.arrow {
+            popover = popover.arrow(arrow);
+        }
+        if let Some(offset) = node.offset {
+            popover = popover.offset(px(offset));
+        }
         if let Some(anchor) = mapping::parse_anchor(node.placement.as_deref()) {
             popover = popover.anchor(anchor);
         }
@@ -5469,6 +5535,20 @@ impl RootView {
                 node.presets
                     .iter()
                     .filter_map(|item| {
+                        if node.time_precision.is_some()
+                            && !node.range
+                            && !node.multiple
+                            && let Some(value) = item
+                                .value
+                                .as_ref()
+                                .and_then(Value::as_str)
+                                .and_then(release_070::parse_date_time)
+                        {
+                            return Some(gpui_component::date_picker::DateRangePreset::date_time(
+                                item.label_or_id(),
+                                value,
+                            ));
+                        }
                         let date = extra::date_from_value(&item.value, node.range || node.multiple);
                         match (date.start(), date.end()) {
                             (Some(start), Some(end)) if !date.is_single() => {
@@ -5513,18 +5593,23 @@ impl RootView {
         self.used_dates.insert(key.to_string());
         let range = node.range || node.multiple;
         let first_day = mapping::parse_first_day_of_week(node.first_day_of_week.as_ref());
-        let wanted = extra::date_from_value(&node.value, range);
+        let wanted = release_070::date_time_value(node, range);
         let config = format!(
-            "{:?}/{:?}/{:?}",
-            node.date_format, node.year_range, node.disabled_dates
+            "{:?}/{:?}/{:?}/{:?}/{:?}/{:?}",
+            node.date_format,
+            node.year_range,
+            node.disabled_dates,
+            node.time_precision,
+            node.hour_cycle,
+            node.default_time
         );
         if let Some(slot) = self.dates.get_mut(key) {
             slot.on_change = node.on_change.clone();
             let state = slot.state.clone();
             if slot.range == range && slot.first_day == first_day && slot.config == config {
-                let current = state.read(cx).date();
+                let current = state.read(cx).date_time();
                 if current != wanted {
-                    state.update(cx, |picker, cx| picker.set_date(wanted, window, cx));
+                    state.update(cx, |picker, cx| picker.set_date_time(wanted, window, cx));
                 }
                 return state;
             }
@@ -5535,6 +5620,18 @@ impl RootView {
             } else {
                 DatePickerState::new(window, cx)
             };
+            if !range && let Some(p) = node.time_precision.as_deref() {
+                picker = picker
+                    .time_precision(release_070::precision(Some(p)))
+                    .hour_cycle(release_070::hour_cycle(node.hour_cycle.as_deref()));
+            }
+            if let Some(time) = node
+                .default_time
+                .as_deref()
+                .and_then(release_070::parse_time)
+            {
+                picker = picker.default_time(time);
+            }
             picker = picker
                 .date_format(
                     node.date_format
@@ -5557,12 +5654,16 @@ impl RootView {
             }
             picker
         });
-        state.update(cx, |picker, cx| picker.set_date(wanted, window, cx));
+        state.update(cx, |picker, cx| picker.set_date_time(wanted, window, cx));
         let key_owned = key.to_string();
         cx.subscribe(&state, move |this, _, event: &DatePickerEvent, _cx| {
             let DatePickerEvent::Change(date) = event;
             if let Some(id) = this.dates.get(&key_owned).and_then(|s| s.on_change.clone()) {
-                this.emit_value(id, extra::date_to_value(*date));
+                let precision = this
+                    .dates
+                    .get(&key_owned)
+                    .and_then(|s| s.time_precision.as_deref());
+                this.emit_value(id, release_070::date_time_json(*date, precision));
             }
         })
         .detach();
@@ -5572,6 +5673,11 @@ impl RootView {
                 state: state.clone(),
                 range,
                 first_day,
+                time_precision: if range {
+                    None
+                } else {
+                    node.time_precision.clone()
+                },
                 config,
                 on_change: node.on_change.clone(),
             },
@@ -5589,6 +5695,7 @@ impl RootView {
         let state = self.editor_slot(key, node, window, cx);
         self.sync_text_search(key, node, &state, window, cx);
         self.sync_editor_providers(key, node, &state, cx);
+        self.sync_range_decorations(key, node, &state, cx);
         // Code editor Input is multi-line but `h_auto` without an explicit
         // height collapses to a single row. Fill the viewport wrapper.
         viewport_sized(
@@ -5728,6 +5835,7 @@ impl RootView {
     ) -> Entity<TextareaState> {
         let state = self.textarea_state(key, node, window, cx);
         self.sync_textarea_options(key, node, &state, window, cx);
+        self.sync_textarea_tokens(key, node, &state, window, cx);
         self.sync_text_search(key, node, &state, window, cx);
         state
     }
@@ -5757,7 +5865,10 @@ impl RootView {
             );
             let focused = state.read(cx).focus_handle(cx).is_focused(window);
             let current = state.read(cx).value().to_string();
-            if current != wanted && (force || (!focused && slot.wait_for_seq.is_none())) {
+            if current != wanted
+                && (force || (!focused && slot.wait_for_seq.is_none()))
+                && !self.text_070.pending_token_insert(key, node)
+            {
                 let wanted = wanted.clone();
                 state.update(cx, |input, cx| input.set_value(wanted, window, cx));
             }
@@ -6333,6 +6444,9 @@ impl RootView {
         {
             row = row.icon(icon);
         }
+        if let Some(label) = &item.accessibility_label {
+            row = row.accessibility_label(label.clone());
+        }
         if let Some(suffix) = item.suffix.clone() {
             row = row.suffix(move |_, _| suffix.clone());
         }
@@ -6375,6 +6489,10 @@ impl RootView {
         if let Some(slot) = self.docks.get_mut(key)
             && slot.fingerprint == fingerprint
         {
+            if slot.close_button != node.close_button.unwrap_or(false) {
+                slot.close_button = node.close_button.unwrap_or(false);
+                slot.skin.set_close_button_visible(slot.close_button, cx);
+            }
             for item in node.collection() {
                 let id = item.id_or_label();
                 if let Some(panel) = slot.panels.get(&id) {
@@ -6419,8 +6537,9 @@ impl RootView {
             }
             return viewport_sized(slot.area.clone(), node, 360.0, cx);
         }
-        let (area, _skin) =
+        let (area, skin) =
             DockSkin::dock_area(SharedString::from(key.to_string()), None, window, cx);
+        skin.set_close_button_visible(node.close_button.unwrap_or(false), cx);
         let mut panels: HashMap<String, Entity<extra::CljPanel>> = HashMap::new();
         let mut by_side: HashMap<&str, Vec<std::sync::Arc<dyn gpui::base::dock::PanelView>>> =
             HashMap::new();
@@ -6521,6 +6640,8 @@ impl RootView {
         self.docks.insert(
             key.to_string(),
             DockSlot {
+                skin,
+                close_button: node.close_button.unwrap_or(false),
                 layout: node.dock_layout.clone(),
                 native_layout: None,
                 options: node.dock_options.clone(),
@@ -7017,6 +7138,12 @@ impl RootView {
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.parity.prune(&self.mounted_widgets);
+        self.release.prune(&self.mounted_widgets);
+        self.text_070.prune(
+            &self.mounted_widgets,
+            &self.used_inputs,
+            &self.used_textareas,
+        );
         self.apply_theme(window, cx);
         self.apply_chrome(window);
         self.native_window_id = preview::native_window_id(window);
@@ -7240,10 +7367,6 @@ impl Render for RootView {
         self.sync_notifications(window, cx);
         self.sync_native_menus(window, cx);
 
-        let dialog_layer = Root::render_dialog_layer(window, cx);
-        let sheet_layer = Root::render_sheet_layer(window, cx);
-        let notification_layer = Root::render_notification_layer(window, cx);
-
         let show_footer = self.show_dev_chrome();
         let status = self.status.clone();
 
@@ -7266,10 +7389,6 @@ impl Render for RootView {
                 )
                 .child(gpui_fps::fps_monitor(window, cx))
             })
-            // gpui-component 0.5.1 Root::render does not paint this layer.
-            .children(dialog_layer)
-            .children(sheet_layer)
-            .children(notification_layer)
     }
 }
 
@@ -7514,20 +7633,15 @@ fn apply_select_controlled_value<D>(
 }
 
 fn emit_select_confirm(this: &mut RootView, key: &str, value: Option<&SharedString>) {
-    let Some(id) = this
-        .selects
-        .get(key)
-        .and_then(|slot| slot.on_change.clone())
-    else {
-        return;
-    };
     if let Some(slot) = this.selects.get_mut(key) {
         slot.selected = value.cloned();
     }
-    match value {
-        Some(selected) => this.emit_value(id, json!(selected.to_string())),
-        None => this.emit_value(id, Value::Null),
-    }
+    this.callback_queue
+        .push(overlay::QueuedAction::WidgetValue {
+            key: key.into(),
+            event: "change".into(),
+            value: value.map(|v| json!(v.as_ref())).unwrap_or(Value::Null),
+        });
 }
 
 fn finish_select<D>(mut select: Select<D>, node: &Node, cx: &App) -> AnyElement
@@ -8661,39 +8775,54 @@ fn resolve_theme(node: &Node, window: &Window, cx: &App) -> Option<ThemeApply> {
 
 fn apply_theme_pref(pref: &str, window: &Window, cx: &mut App) {
     if catalog::is_appearance(pref) {
-        catalog::reset_default_palettes(cx);
         let mode = match catalog::normalize(pref).as_str() {
             "light" => ThemeMode::Light,
             "dark" => ThemeMode::Dark,
             _ => ThemeMode::from(window.appearance()),
         };
-        Theme::change(mode, None, cx);
+        let config = {
+            let registry = gpui_component::theme::ThemeRegistry::global(cx);
+            if mode == ThemeMode::Dark {
+                registry.default_dark_theme().clone()
+            } else {
+                registry.default_light_theme().clone()
+            }
+        };
+        let current = Theme::global(cx);
+        if current.mode != mode || !catalog::names_equal(current.theme_name(), config.name.as_ref())
+        {
+            activate_theme(&ThemeApply::Appearance(mode), cx);
+        }
         return;
     }
     match catalog::lookup(pref, ThemeMode::from(window.appearance()), cx) {
         Some(config) => {
-            let already =
-                catalog::names_equal(Theme::global(cx).theme_name(), config.name.as_ref());
-            if !already {
-                Theme::global_mut(cx).apply_config(&config);
+            if !catalog::names_equal(Theme::global(cx).theme_name(), config.name.as_ref()) {
+                activate_theme(&ThemeApply::Named(config), cx);
             }
         }
-        None => {
-            eprintln!("[host] unknown gpui-component theme {pref:?}; keeping current");
-        }
+        None => eprintln!("[host] unknown gpui-component theme {pref:?}; keeping current"),
     }
 }
 
 fn activate_theme(applied: &ThemeApply, cx: &mut App) {
+    // A temporary per-subtree scope must not call Theme::change/update:
+    // those APIs now refresh every window, causing an endless frame loop.
     match applied {
         ThemeApply::Appearance(mode) => {
             catalog::reset_default_palettes(cx);
-            Theme::change(*mode, None, cx);
+            let theme = Theme::global_mut(cx);
+            theme.mode = *mode;
+            let config = if *mode == ThemeMode::Dark {
+                theme.dark_theme.clone()
+            } else {
+                theme.light_theme.clone()
+            };
+            theme.apply_config(&config);
         }
-        ThemeApply::Named(config) => {
-            Theme::global_mut(cx).apply_config(config);
-        }
+        ThemeApply::Named(config) => Theme::global_mut(cx).apply_config(config),
     }
+    Theme::sync_base(cx);
 }
 
 /// Switches gpui-component's global theme around a subtree during layout/paint.
@@ -8722,6 +8851,7 @@ fn with_theme_apply<R>(applied: &ThemeApply, cx: &mut App, f: impl FnOnce(&mut A
     activate_theme(applied, cx);
     let result = f(cx);
     *Theme::global_mut(cx) = prev;
+    Theme::sync_base(cx);
     result
 }
 
@@ -8960,6 +9090,16 @@ fn initial_window_events(
     (events, window_size)
 }
 
+/// Dialog inputs share the same native token presentation and activation hooks.
+pub(crate) fn input_token_chrome(input: Input, node: &Node, path: &str) -> Input {
+    let key = node
+        .id
+        .as_deref()
+        .or(node.source_path.as_deref())
+        .unwrap_or(path);
+    text_070::input_tokens(input, node, key)
+}
+
 pub fn open_window(
     nrepl_port: u16,
     cmd_tx: mpsc::Sender<Cmd>,
@@ -8982,8 +9122,9 @@ pub fn open_window(
     // preserves its old origin and makes wider apps extend off the right edge.
     let (initial_events, (width, height)) = initial_window_events(&cmd_tx, &event_rx);
     let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
-    cx.open_window(
+    gpui_kit::open_window(
         initial_window_options(&initial_events, bounds),
+        cx,
         |window, cx| {
             let view = cx.new(|cx| {
                 RootView::new_with_initial_events(
@@ -9001,12 +9142,11 @@ pub fn open_window(
                     this.handle_clj_action(action);
                 });
             });
-            let root = cx.new(|cx| Root::new(view, window, cx));
             window.on_window_should_close(cx, |_, cx| {
                 quit_host(cx);
                 true
             });
-            root
+            view
         },
     )
     .unwrap();

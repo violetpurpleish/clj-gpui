@@ -844,6 +844,15 @@ fn kit_accessibility_label(node: &Node) -> Option<String> {
 /// Kit `Switch` chrome (size, disabled, native tooltip, a11y). Not `.color()`
 /// (checked-track fill would collide with host text `:color`).
 pub fn apply_switch_chrome(mut el: Switch, node: &Node) -> Switch {
+    if let Some(enabled) = node.focus_ring {
+        el = el.focus_ring(enabled);
+    }
+    if let Some(enabled) = node.tab_stop {
+        el = el.tab_stop(enabled);
+    }
+    if let Some(index) = node.tab_index {
+        el = el.tab_index(index as isize);
+    }
     if node.disabled {
         el = el.disabled(true);
     }
@@ -1575,6 +1584,7 @@ fn paste_handler(
 
 /// Kit Textarea chrome, native menu recipes and clipboard policy.
 pub fn apply_textarea_chrome(mut input: Textarea, node: &Node) -> Textarea {
+    input = input.with_size(parse_scale(node.control_size.as_deref()));
     if let Some(appearance) = node.appearance {
         input = input.appearance(appearance);
     }

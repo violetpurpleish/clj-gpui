@@ -338,6 +338,7 @@ pub(crate) fn scope_content_paths(node: &mut Node, path: &str) {
             }
             for (name, content) in [
                 ("display", &mut item.display_content),
+                ("tooltip-content", &mut item.tooltip_content),
                 ("header", &mut item.header),
                 ("footer", &mut item.footer),
             ] {
@@ -488,6 +489,7 @@ fn walk_node_scope(
             }
             for (name, content) in [
                 ("display", &item.display_content),
+                ("tooltip-content", &item.tooltip_content),
                 ("header", &item.header),
                 ("footer", &item.footer),
             ] {
@@ -1028,6 +1030,15 @@ impl QueuedAction {
         match self {
             Self::WidgetValue { event, value, .. } => {
                 let callback = match event.as_str() {
+                    "change" => node.on_change,
+                    "current-change" => node.on_current_change,
+                    "complete" => node.on_complete,
+                    "submit" => node.on_submit,
+                    "dismiss" => node.on_dismiss,
+                    "token-click" => node.on_token_click,
+                    "content-change" => node.on_content_change,
+                    "reveal" => node.on_reveal,
+                    "text-state" => node.on_text_state,
                     "paste" => node.on_paste,
                     "hover" => node.on_hover,
                     "link-click" => node.on_link_click,
@@ -1041,7 +1052,13 @@ impl QueuedAction {
                     _ => None,
                 };
                 callback
-                    .map(|id| vec![protocol::CallbackCall::with_value(id, value.clone())])
+                    .map(|id| {
+                        vec![if event == "dismiss" {
+                            protocol::CallbackCall::fire(id)
+                        } else {
+                            protocol::CallbackCall::with_value(id, value.clone())
+                        }]
+                    })
                     .unwrap_or_default()
             }
             Self::ButtonClick { .. } if node.kind == "button" && !node.disabled => node
@@ -2064,7 +2081,11 @@ fn paint_static_node(
     match node.kind.as_str() {
         "input" if inputs.contains_key(path) => mapping::apply_styled(
             mapping::apply_input_chrome(
-                Input::new(&inputs[path]).id(SharedString::from(path.to_string())),
+                crate::renderer::input_token_chrome(
+                    Input::new(&inputs[path]).id(SharedString::from(path.to_string())),
+                    node,
+                    path,
+                ),
                 node,
             ),
             node,

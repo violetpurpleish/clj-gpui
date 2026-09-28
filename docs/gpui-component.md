@@ -2,7 +2,7 @@
 
 The current source inventory and parity findings are in [gpui-kit-parity.md](gpui-kit-parity.md). The contract notes below describe the existing adapters; the linked audit records the additional composition APIs and remaining gaps.
 
-clj-gpui 0.1.0 requires **[GPUI Kit 0.6.6](https://crates.io/crates/gpui-kit/0.6.6)** (`gpui-kit` facade → `gpui-pre` 0.3.6 + `gpui-component` 0.6.6 + `gpui-kit-assets`). This document is the inventory of that exact crate, not later git `main`.
+clj-gpui 0.1.0 requires **[GPUI Kit 0.7.0](https://crates.io/crates/gpui-kit/0.7.0)** (`gpui-kit` facade → `gpui-pre` 0.3.7 + `gpui-component` 0.7.0 + `gpui-kit-assets`). This document is the inventory of that exact crate, not later git `main`.
 
 0.5.1 names (`ui/text-field`, `ui/divider`) were dropped. Data tables are `ui/data-table`. `ui/table` is Kit's declarative `Table`.
 
@@ -55,7 +55,7 @@ Coverage-table **status** is not Kit public-API parity by itself:
 | `group_box::GroupBox` | `ui/group-box` | ✅ | B | `:variant` `:normal` / `:fill` / `:outline` |
 | `badge::Badge` | `ui/badge` | ✅ | B | Count, `:dot`, or kebab `:icon`; wraps a child. `:max` overflow cap (Kit default 99). `:color` hex is Kit overlay background, not host text color. Host wrapper owns layout keys |
 | `tab::TabBar` | `ui/tabs` | ✅ | B | Bar only; Clojure renders the selected panel; keyword ids round-trip. `:menu` is Kit overflow menu (omit = false). `:max-width` is per-tab label truncation, not bar layout `:width` |
-| `select::Select` | `ui/select` | ✅ | B | Host-held `SelectState<SearchableVec>`. Flat `{id, label}` options, or nested `:items` as Kit `SelectGroup` (`IndexPath` section+row). `:searchable true` filters by label (and group title, matching Kit). `nil` clears. Controlled id changes use `set_selected_value` (not a full-list `IndexPath` into a filtered delegate). Collection fingerprint changes rebuild the slot so query text and `matched_items` agree; native Confirm caches the id so a Clojure echo is a no-op. Option `:display` is the string form of `SelectItem::display_title`; `:disabled` greys a row. Chrome: `:cleanable`, `:title-prefix`, `:menu-width` / `:menu-max-h` (px), `:search-placeholder`, `:empty` (string or widget), `:icon`, `:appearance`, `:focus-ring` (omit = Kit true), `:accessibility-label`. The styled 0.6.6 Select does not forward BaseSelect's dismiss event, so `:on-dismiss` is deliberately absent. Widget `:empty`, option `:content` / `:display`, and group `:header` use the production renderer |
+| `select::Select` | `ui/select` | ✅ | B | Host-held `SelectState<SearchableVec>`. Flat `{id, label}` options, or nested `:items` as Kit `SelectGroup` (`IndexPath` section+row). `:searchable true` filters by label (and group title, matching Kit). `nil` clears. Controlled id changes use `set_selected_value` (not a full-list `IndexPath` into a filtered delegate). Collection fingerprint changes rebuild the slot so query text and `matched_items` agree; native Confirm caches the id so a Clojure echo is a no-op. Option `:display` is the string form of `SelectItem::display_title`; `:disabled` greys a row. Chrome: `:cleanable`, `:title-prefix`, `:menu-width` / `:menu-max-h` (px), `:search-placeholder`, `:empty` (string or widget), `:icon`, `:appearance`, `:focus-ring` (omit = Kit true), `:accessibility-label`. `:on-dismiss` fires when an open menu closes, after Change on confirmation. Widget `:empty`, option `:content` / `:display`, and group `:header` use the production renderer |
 | `Icon` / `IconName` | `ui/icon` | ✅ | B | Any bundled Lucide kebab name (`:accessibility`, `:circle-check`) through `AllAssets`, or UTF-8 inline SVG in `:icon-svg` (takes precedence; invalid data falls back safely) |
 | `clipboard::Clipboard` | `ui/clipboard` | ✅ | B | `:on-copied` receives the string. Host wrapper owns layout keys |
 | `breadcrumb::Breadcrumb` | `ui/breadcrumb` | ✅ | B | Group `:on-change` receives the original Clojure id |
@@ -185,3 +185,7 @@ The wire still uses JSON strings. `gpui.ui` keeps a map of wire id → original 
 | `dock` | `:on-layout-change` | native JSON layout |
 | `dock` | `:on-panel-event` | `{:id :event :value}`; id is a wire string |
 | custom Settings field | `:on-reset` | none (0-arg) |
+
+## GPUI Kit 0.7 additions
+
+See [the 0.7 migration guide](gpui-kit-0.7.0-migration.md) for Toolbar, Questionnaire, TimeField, date/time values, inline tokens, range decorations, Markdown search and chart options. All new native compound parts are available through `gpui.ui`.

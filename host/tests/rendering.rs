@@ -395,6 +395,71 @@ mod macos {
             }
         }
 
-        println!("rendering: 7 passed (production RootView, Metal)");
+        // New Kit controls and opt-in text annotations must paint through the
+        // production renderer, including an Input inside an InputGroup.
+        let kit_070_tree = |annotated: bool| {
+            serde_json::from_value(json!({
+                "type":"window", "chrome":"app", "theme":"light", "padding":20, "gap":12,
+                "children":[
+                    {"type":"toolbar","id":"new-tools","children":[
+                        {"type":"toolbar-group","id":"new-group","accessibility-label":"Document","children":[
+                            {"type":"button","text":"Save"}, {"type":"button","text":"Publish"}
+                        ]}, {"type":"label","text":"Kit 0.7"}
+                    ]},
+                    {"type":"hstack","gap":16,"children":[
+                        {"type":"time-field","id":"new-time","value":"14:35:22","time-precision":"second","hour-cycle":"h12"},
+                        {"type":"date-picker","id":"new-date","width":270,"value":"2026-09-28T14:35","time-precision":"minute","date-format":"%Y-%m-%d %H:%M"}
+                    ]},
+                    {"type":"input-group","width":400,"children":[
+                        {"type":"input","id":"new-token","text":"Hello @Ada", "tokens": if annotated { json!([{"id":"ada","text":"@Ada","label":"Ada","range":[6,10]}]) } else {json!([])},
+                         "token-style":{"bg":"#ffe100"}},
+                        {"type":"input-group-addon","children":[{"type":"input-group-text","text":"Draft"}]}
+                    ]},
+                    {"type":"hstack","gap":16,"children":[
+                        {"type":"questionnaire","id":"new-survey","width":270,"questions":[
+                            {"id":"language","label":"Choose a language","required":true,"choices":[{"id":"clj","label":"Clojure"},{"id":"rs","label":"Rust"}]}
+                        ]},
+                        {"type":"vstack","width":270,"gap":12,"children":[
+                            {"type":"chart","id":"new-line","variant":"line","height":160,"y-domain":[0,100],"point-count":5,"y-axis":true,"y-tick-count":3,"x-tick-count":3,"grid-columns":4,"grid-dashed":true,"reference-lines":[50],"items":[{"label":"Mon","value":20},{"label":"Tue","value":80},{"label":"Wed","value":40}]},
+                            {"type":"markdown","id":"new-search","height":60,"text":"Search **across formatting** here.","search": if annotated { json!({"query":"across formatting","color":"#ffe100"}) } else { json!(null) }}
+                        ]}
+                    ]}
+                ]
+            })).unwrap()
+        };
+        let mut kit_070_images = Vec::new();
+        for annotated in [false, true] {
+            event_tx
+                .send_blocking(protocol::HostEvent::tree(
+                    kit_070_tree(annotated),
+                    None,
+                    vec![],
+                ))
+                .unwrap();
+            cx.run_until_parked();
+            cx.update_window(handle.into(), |_, window, cx| window.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+            cx.update_window(handle.into(), |_, window, cx| window.render_frame(cx))
+                .unwrap();
+            kit_070_images.push(cx.capture_screenshot(handle.into()).unwrap());
+        }
+        assert_ne!(
+            kit_070_images[0], kit_070_images[1],
+            "native token/search annotation changes must affect pixels"
+        );
+        assert!(
+            kit_070_images[1]
+                .pixels()
+                .filter(|p| p.0[..3] == [255, 225, 0])
+                .count()
+                > 100,
+            "token and Markdown highlights must paint"
+        );
+        kit_070_images[1]
+            .save("/private/tmp/clj-gpui-kit-070.png")
+            .unwrap();
+
+        println!("rendering: 8 passed (production RootView, Metal)");
     }
 }
