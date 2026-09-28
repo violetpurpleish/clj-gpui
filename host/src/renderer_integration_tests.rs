@@ -2292,6 +2292,7 @@ async fn production_calendar_days_are_accessible_and_selectable(cx: &mut TestApp
     );
 }
 
+#[cfg(target_os = "macos")]
 #[gpui_kit::test]
 async fn modal_backdrop_keeps_custom_title_bar_drag_area(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);

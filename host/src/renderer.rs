@@ -7435,10 +7435,11 @@ impl Render for RootView {
                         let moving = dragging.clone();
                         window.on_mouse_event(
                             move |event: &gpui::MouseMoveEvent, phase, window, _| {
-                                if phase.capture() && moving.replace(false) {
-                                    if event.pressed_button == Some(gpui::MouseButton::Left) {
-                                        window.start_window_move();
-                                    }
+                                if phase.capture()
+                                    && moving.replace(false)
+                                    && event.pressed_button == Some(gpui::MouseButton::Left)
+                                {
+                                    window.start_window_move();
                                 }
                             },
                         );
