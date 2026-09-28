@@ -609,6 +609,28 @@ struct TreeOverlays {
     native_menus: Vec<(String, Node)>,
 }
 
+/// Kit's dialog backdrop is above the title bar. On macOS the title bar
+/// starts a window move from its own mouse-move handler, which the backdrop
+/// prevents from running. Keep a drag area clear of the dialog surface and
+/// traffic lights while a dialog is open.
+fn dialog_title_bar_drag_region(
+    x: f32,
+    y: f32,
+    viewport_width: f32,
+    title_bar_height: f32,
+    dialog_width: f32,
+    traffic_light_x: f32,
+) -> bool {
+    if x < traffic_light_x + 72. || y < 0. || y >= title_bar_height {
+        return false;
+    }
+    let dialog_width = dialog_width.min((viewport_width - 32.).max(0.));
+    let dialog_left = (viewport_width - dialog_width) / 2.;
+    // The popup may rise to the window's 16 px edge margin when it is tall.
+    // Only its side margins remain safe to drag in that case.
+    y < 16. || x < dialog_left || x >= dialog_left + dialog_width
+}
+
 pub struct RootView {
     tree: Option<Rc<Node>>,
     content_slots: HashMap<String, Node>,
@@ -653,6 +675,7 @@ pub struct RootView {
     dialog_inputs: Rc<RefCell<overlay::OverlayInputs>>,
     dialog_keys: Vec<String>,
     dialog_pending: bool,
+    dialog_title_bar_drag: Rc<Cell<bool>>,
     callback_queue: overlay::CallbackQueue,
     missing_glyphs: Option<Subscription>,
     sheet: Option<overlay::SheetSpec>,
@@ -1206,6 +1229,7 @@ impl RootView {
             dialog_inputs: Rc::new(RefCell::new(HashMap::new())),
             dialog_keys: Vec::new(),
             dialog_pending: false,
+            dialog_title_bar_drag: Rc::new(Cell::new(false)),
             callback_queue: overlay::CallbackQueue::default(),
             missing_glyphs: None,
             sheet: None,
@@ -7369,6 +7393,72 @@ impl Render for RootView {
 
         let show_footer = self.show_dev_chrome();
         let status = self.status.clone();
+        let title_bar_drag = if cfg!(target_os = "macos")
+            && window.has_active_dialog(cx)
+            && !self.dialogs.is_empty()
+        {
+            self.custom_title_bar.as_ref().map(|bar| {
+                let height = bar.height.unwrap_or(34.);
+                let traffic_light_x = bar.traffic_light_position.map_or(9., |p| p[0]);
+                let dialog_width = self
+                    .dialogs
+                    .iter()
+                    .map(|spec| spec.node.width.unwrap_or(448.))
+                    .fold(0., f32::max);
+                let dragging = self.dialog_title_bar_drag.clone();
+                canvas(
+                    |_, _, _| (),
+                    move |_, _, window, _| {
+                        let down = dragging.clone();
+                        window.on_mouse_event(
+                            move |event: &gpui::MouseDownEvent, phase, window, cx| {
+                                if !phase.capture() {
+                                    return;
+                                }
+                                let active = event.button == gpui::MouseButton::Left
+                                    && dialog_title_bar_drag_region(
+                                        event.position.x.as_f32(),
+                                        event.position.y.as_f32(),
+                                        window.viewport_size().width.as_f32(),
+                                        height,
+                                        dialog_width,
+                                        traffic_light_x,
+                                    );
+                                down.set(active);
+                                if active {
+                                    // Kit's backdrop dismisses mouse-downs below its fixed
+                                    // 34 px titlebar. A taller app titlebar is still a drag area.
+                                    cx.stop_propagation();
+                                }
+                            },
+                        );
+                        let moving = dragging.clone();
+                        window.on_mouse_event(
+                            move |event: &gpui::MouseMoveEvent, phase, window, _| {
+                                if phase.capture() && moving.replace(false) {
+                                    if event.pressed_button == Some(gpui::MouseButton::Left) {
+                                        window.start_window_move();
+                                    }
+                                }
+                            },
+                        );
+                        window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, _, _| {
+                            if phase.capture() && event.button == gpui::MouseButton::Left {
+                                dragging.set(false);
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .into_any_element()
+            })
+        } else {
+            self.dialog_title_bar_drag.set(false);
+            None
+        };
 
         v_flex()
             .size_full()
@@ -7377,6 +7467,7 @@ impl Render for RootView {
             .text_color(cx.theme().foreground)
             .children(fallback_title_bar)
             .child(v_flex().flex_1().min_h_0().child(body))
+            .children(title_bar_drag)
             .when(show_footer, |el| {
                 el.child(
                     div()
@@ -9156,7 +9247,8 @@ pub fn open_window(
 #[cfg(test)]
 mod window_startup_tests {
     use super::{
-        DEFAULT_WINDOW_SIZE, initial_window_events, initial_window_options, requested_window_size,
+        DEFAULT_WINDOW_SIZE, dialog_title_bar_drag_region, initial_window_events,
+        initial_window_options, requested_window_size,
     };
     use crate::protocol::{Cmd, HostEvent, Node};
     use gpui_kit::component::TitleBar;
@@ -9166,6 +9258,17 @@ mod window_startup_tests {
 
     fn bounds() -> Bounds<gpui_kit::Pixels> {
         Bounds::new(point(px(200.), px(100.)), size(px(1000.), px(700.)))
+    }
+
+    #[test]
+    fn dialog_backdrop_keeps_safe_title_bar_drag_regions() {
+        let drag = |x, y| dialog_title_bar_drag_region(x, y, 1120., 56., 600., 10.);
+        assert!(drag(120., 40.)); // Left of the dialog, beyond traffic lights.
+        assert!(drag(940., 40.)); // Right of the dialog.
+        assert!(drag(500., 10.)); // Above even a dialog snapped to the edge.
+        assert!(!drag(50., 40.)); // Native traffic lights.
+        assert!(!drag(500., 40.)); // A tall dialog may occupy this space.
+        assert!(!drag(120., 56.)); // Below the app title bar.
     }
 
     #[test]

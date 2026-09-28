@@ -2292,6 +2292,48 @@ async fn production_calendar_days_are_accessible_and_selectable(cx: &mut TestApp
     );
 }
 
+#[gpui_kit::test]
+async fn modal_backdrop_keeps_custom_title_bar_drag_area(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(1120.), px(820.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let tree = serde_json::from_value(json!({
+        "type": "window", "chrome": "app", "children": [
+            {"type": "title-bar", "height": 56, "traffic-light-position": [10, 19],
+             "children": [{"type": "label", "text": "Podcast"}]},
+            {"type": "label", "text": "Content"},
+            {"type": "dialog", "id": "transcription-jobs", "open": true,
+             "title": "Transcription progress", "width": 600,
+             "children": [{"type": "label", "text": "Working"}]}
+        ]
+    }))
+    .unwrap();
+    event_tx
+        .send(HostEvent::tree(tree, None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let mut visual = VisualTestContext::from_window(handle.into(), cx);
+    visual.update(|window, cx| assert!(window.has_active_dialog(cx)));
+
+    let title_bar = point(px(120.), px(40.));
+    visual.simulate_mouse_down(title_bar, MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_up(title_bar, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    visual.update(|window, cx| assert!(window.has_active_dialog(cx)));
+
+    // Outside the toolbar and popup, the ordinary backdrop still dismisses.
+    let backdrop = point(px(120.), px(200.));
+    visual.simulate_mouse_down(backdrop, MouseButton::Left, Modifiers::default());
+    visual.simulate_mouse_up(backdrop, MouseButton::Left, Modifiers::default());
+    visual.run_until_parked();
+    visual.update(|window, cx| assert!(!window.has_active_dialog(cx)));
+}
+
 fn dialog_tree(open: bool, generation: &str) -> Node {
     serde_json::from_value(json!({
         "type": "window", "chrome": "app", "padding": 16, "children": [
