@@ -39,6 +39,10 @@ Without `CLJ_GPUI_BIN`, a development build runs `cargo build --locked --release
 
 ## Your project
 
+Start from [`templates/cljs/`](../templates/cljs/) for a complete app with
+shadow-cljs, npm, hot reload and macOS/Linux packaging. The JVM starter lives in
+[`templates/clj/`](../templates/clj/).
+
 For a sibling checkout, add the library's source path to `shadow-cljs.edn`:
 
 ```clojure
@@ -111,7 +115,23 @@ bun run cljs:release
 CLJ_GPUI_BIN=/absolute/path/to/clj-gpui node target/cljs-counter.js
 ```
 
-A release build hides development chrome and requires a prebuilt host via `:host` / `CLJ_GPUI_BIN` by default. Ship the compiled JavaScript, Node runtime, native host and production npm dependencies. Build the host for the destination platform. `gpui.package` remains the JVM packager; this change does not add Node app bundles, installers or code signing.
+A release build hides development chrome and requires a prebuilt host via `:host` / `CLJ_GPUI_BIN` by default.
+
+For a self-contained application, copy [`templates/cljs/`](../templates/cljs/),
+customize its `gpui.edn`, and run `npm ci` followed by `npm run package`.
+`gpui.package` supports `:backend :cljs`, `:cljs-build` and `:cljs-output` alongside
+its JVM backend. It builds `.app` on macOS, or AppImage and `.deb` on Linux, with
+the released JavaScript, a pinned official Node runtime, the GPUI host and locked
+production npm dependencies. The runtime download is checked against the
+[official Node checksums](https://nodejs.org/dist/v22.23.3/SHASUMS256.txt).
+The starter uses npm's `package-lock.json` for packaging; the repository's existing
+example can still be developed with Bun.
+
+Build each package on its destination OS/architecture. Native npm addons install
+using the bundled Node version; they may need additional build and system
+libraries. Application resources are copied into the bundle. Signing/notarization
+is a separate step, as for JVM apps. The template README describes the supported
+dependency layouts and runtime paths.
 
 ## Checks
 
@@ -129,4 +149,5 @@ clojure -M:test                       # existing JVM suite
 - The same 56 ClojureScript tests / 1,081 assertions also passed with advanced release optimization. The optimized example compiled without warnings.
 - Native example: clicked the counter twice, edited the input, and ran the asynchronous dayjs callback. A source edit hot-reloaded into the same window with count, text and timestamp retained. Closing the native window exited Node successfully.
 - Automatic Cargo build and executable discovery passed the real protocol test without `CLJ_GPUI_BIN`.
-- Linux CI is configured but was not run locally. Node installers and bundles remain outside this change.
+- Linux CI is configured but was not run locally.
+- Template packaging: the macOS `.app` built and launched with a working native counter and bundled `dayjs`. Relocation without system Node and repeated packaging passed. Unit tests exercise macOS, AppImage and Debian layouts; CI additionally builds/extracts actual Linux artifacts.

@@ -19,11 +19,17 @@
   That command is native-only: macOS produces a `.app`, Linux produces
   an AppImage and a `.deb`. It never cross-compiles.
 
+  ClojureScript apps use :backend :cljs, :cljs-build :app and
+  :cljs-output \"target/app.js\" instead of :main. This packages a shadow-cljs
+  release with Node and locked production npm dependencies, without tools.build
+  or a JVM in the shipped app. See templates/cljs/.
+
   LICENSE and NOTICE at the application repo root are copied into the
   package. Extra files can be listed as `:license-files` in `gpui.edn`.
   `:basis-aliases` selects deps.edn aliases for the packaged classpath, e.g.
   platform-specific native libraries; it does not include build tooling."
-  (:require [clojure.edn :as edn]
+  (:require [clojure.data.json :as json]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [gpui.host :as host]
@@ -36,4 +42,5 @@
 (def launcher-script launch/launcher-script)
 
 (load "package_build")
+(load "package_node")
 (load "package_native")

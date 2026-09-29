@@ -1,0 +1,6 @@
+{:deps {:aliases [:cljs]}
+ :builds
+ {:app {:target :node-script
+        :output-to "target/app.js"
+        :main my.app/main
+        :devtools {:after-load my.app/reload!}}}}

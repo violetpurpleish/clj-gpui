@@ -141,7 +141,7 @@
   [opts]
   (when (not= (os-key) :macos)
     (throw (ex-info "macOS .app packaging must run on macOS." {:os (os-key)})))
-  (let [cfg (-> opts uberjar host jre)
+  (let [cfg (prepare-package opts)
         app (io/file (:target cfg) "package" (str (:name cfg) ".app"))]
     (when (.exists app)
       (sh! ["rm" "-rf" (.getPath app)] {}))
@@ -151,8 +151,7 @@
       (spit (io/file contents "Info.plist") (info-plist cfg))
       (write-launcher cfg (io/file macos (:name cfg)))
       (copy-host (:host cfg) (io/file macos "clj-gpui-host"))
-      (copy-file (:jar cfg) (io/file resources (str (:name cfg) ".jar")))
-      (sh! ["cp" "-R" (.getPath ^java.io.File (:runtime cfg)) (.getPath (io/file resources "runtime"))] {})
+      (copy-payload cfg resources true)
       (copy-icon cfg (io/file resources (str (:name cfg) ".png")))
       (maybe-icns cfg resources)
       (copy-licenses cfg (io/file resources "licenses"))
@@ -182,18 +181,6 @@
   (str "https://github.com/AppImage/appimagetool/releases/download/"
        appimagetool-version
        "/appimagetool-" appimage-arch ".AppImage"))
-
-(defn- sha256-hex
-  ^String [^java.io.File f]
-  (let [md (java.security.MessageDigest/getInstance "SHA-256")
-        buf (byte-array 8192)]
-    (with-open [^java.io.InputStream in (io/input-stream f)]
-      (loop []
-        (let [n (.read in buf)]
-          (when (pos? n)
-            (.update md buf 0 n)
-            (recur)))))
-    (format "%064x" (java.math.BigInteger. 1 (.digest md)))))
 
 (defn- executable-on-path
   ^java.io.File [name]
@@ -235,7 +222,7 @@
   [opts]
   (when (not= (os-key) :linux)
     (throw (ex-info "AppImage packaging must run on Linux." {:os (os-key)})))
-  (let [cfg (-> opts uberjar host jre)
+  (let [cfg (prepare-package opts)
         pkg (mkdirp (io/file (:target cfg) "package"))
         appdir (io/file pkg (str (:name cfg) ".AppDir"))]
     (when (.exists appdir)
@@ -249,8 +236,7 @@
       (mkdirp bin)
       (write-launcher cfg (io/file bin (:name cfg)))
       (copy-host (:host cfg) (io/file bin "clj-gpui-host"))
-      (copy-file (:jar cfg) (io/file (mkdirp (io/file usr "lib")) (str (:name cfg) ".jar")))
-      (sh! ["cp" "-R" (.getPath ^java.io.File (:runtime cfg)) (.getPath (io/file usr "runtime"))] {})
+      (copy-payload cfg usr false)
       (let [desktop (desktop-file cfg)]
         (spit (io/file share-app (str (:name cfg) ".desktop")) desktop)
         (spit (io/file appdir (str (:name cfg) ".desktop")) desktop))
@@ -266,6 +252,7 @@
       (chmod-exec (io/file appdir "AppRun"))
       (let [tool (ensure-appimagetool (:target cfg) (:appimage arch))]
         (println "[clj-gpui] appimagetool" (.getPath ^java.io.File out))
+        (when (.exists out) (io/delete-file out))
         (sh! [(.getPath tool) "--no-appstream" (.getPath appdir) (.getPath out)]
              {:env {"APPIMAGE_EXTRACT_AND_RUN" "1"
                     "ARCH" (:appimage arch)}}))
@@ -274,16 +261,17 @@
       (assoc cfg :appimage out :appdir appdir))))
 
 (defn debian-control
-  [{:keys [name version description maintainer arch]}]
+  [{:keys [name version description maintainer arch backend]}]
   (str "Package: " name "\n"
        "Version: " version "\n"
        "Section: utils\n"
        "Priority: optional\n"
        "Architecture: " (or arch (:deb (linux-arch))) "\n"
        "Maintainer: " maintainer "\n"
-       "Depends: libc6, libvulkan1, libxkbcommon0, libwayland-client0 | libx11-6\n"
+       "Depends: libc6, libstdc++6, libgcc-s1, libvulkan1, libxkbcommon0, libwayland-client0 | libx11-6\n"
        "Description: " description "\n"
-       " Native GPUI application packaged with a bundled Java runtime\n"
+       " Native GPUI application packaged with a bundled "
+       (if (= :cljs backend) "Node.js" "Java") " runtime\n"
        " and GPUI host. Development tools (Cargo, Clojure CLI, JDK) are\n"
        " not required at runtime.\n"))
 
@@ -291,9 +279,9 @@
   [opts]
   (when (not= (os-key) :linux)
     (throw (ex-info ".deb packaging must run on Linux." {:os (os-key)})))
-  (let [cfg (if (:jar opts)
+  (let [cfg (if (or (:jar opts) (:node-app opts))
               opts
-              (-> opts uberjar host jre))
+              (prepare-package opts))
         arch (:deb (linux-arch))
         pkg (mkdirp (io/file (:target cfg) "package"))
         root (io/file pkg (str (:name cfg) "_" (:version cfg) "_" arch))
@@ -310,8 +298,7 @@
       (spit (io/file debian "control") (debian-control cfg))
       (write-launcher cfg (io/file lib-bin (:name cfg)))
       (copy-host (:host cfg) (io/file lib-bin "clj-gpui-host"))
-      (copy-file (:jar cfg) (io/file (mkdirp (io/file lib "lib")) (str (:name cfg) ".jar")))
-      (sh! ["cp" "-R" (.getPath ^java.io.File (:runtime cfg)) (.getPath (io/file lib "runtime"))] {})
+      (copy-payload cfg lib false)
       (spit (io/file bin (:name cfg))
             (deb-wrapper cfg))
       (chmod-exec (io/file bin (:name cfg)))

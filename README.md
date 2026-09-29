@@ -137,7 +137,11 @@ Until this is published, add a git or local dependency:
                            :git/sha "REPLACE_WITH_SHA"}}}
 ```
 
-Copy `template/` as a starting app. Then:
+Copy [`templates/clj/`](templates/clj/) as a JVM starting app. For ClojureScript,
+copy [`templates/cljs/`](templates/cljs/), which includes shadow-cljs, npm and
+native packaging. Both templates assume a sibling `clj-gpui` checkout by default.
+
+For the JVM template:
 
 ```bash
 clj -M:dev
@@ -227,7 +231,7 @@ If `app` throws, or if reload itself fails (syntax error, unmatched delimiter, u
 
 ## Formatting
 
-Clojure is formatted with [cljfmt](https://github.com/weavejester/cljfmt) using [community indentation](https://guide.clojure.style/#one-space-indent) (one space when arguments start on the next line). Config is `.cljfmt.edn`. It covers `src/`, `test/`, `test-cljs/`, `examples/`, and `template/`.
+Clojure is formatted with [cljfmt](https://github.com/weavejester/cljfmt) using [community indentation](https://guide.clojure.style/#one-space-indent) (one space when arguments start on the next line). Config is `.cljfmt.edn`. It covers `src/`, `test/`, `test-cljs/`, `examples/`, and `templates/`.
 
 ```bash
 clojure -M:cljfmt check
@@ -260,7 +264,8 @@ examples/counter/             ; plain counter
 examples/widgets/             ; gallery of newly supported widgets
 examples/todomvc/             ; classic TodoMVC layout
 examples/themes/              ; custom ThemeSet (Catppuccin Violet)
-template/                     ; copyable app skeleton
+templates/clj/                ; copyable JVM app with native packaging
+templates/cljs/               ; copyable shadow-cljs/npm app with native packaging
 test/                         ; unit tests + gpui.test-app
 docs/protocol.md
 docs/gpui-component.md        ; coverage inventory vs GPUI Kit 0.6
@@ -575,7 +580,10 @@ JSON still works: put extra theme-set files (same schema as [GPUI Kit themes](ht
 
 ## Packaging
 
-A packaged app is still two processes: a bundled JRE running `gpui.prod`, plus the bundled GPUI host. `gpui.prod` does **not** start nREPL, watch source, or invoke Cargo, and it always suppresses the development footer and FPS HUD even when the application uses `:chrome :dev` locally.
+A packaged app runs its code in a bundled JVM or Node runtime, alongside the
+bundled GPUI host. Both release paths suppress development chrome and run without
+the compiler, source watcher, nREPL, or Cargo. The JVM configuration is shown
+below; the [ClojureScript template](templates/cljs/) includes its Node configuration.
 
 In the application repo, add `gpui.edn`:
 
@@ -605,7 +613,7 @@ Then, on the target OS:
 clj -X:build package
 ```
 
-The project template and every checked-in example already contain a `gpui.edn` and this build alias. For a packaged-app smoke test on macOS:
+The JVM template and JVM examples already contain a `gpui.edn` and this build alias. For a packaged-app smoke test on macOS:
 
 ```bash
 cd examples/widgets
@@ -620,7 +628,32 @@ Use `-X` (not `-T`): `gpui.package` lives in the clj-gpui library, so the projec
 | macOS | `Name.app` |
 | Linux | `name-version-<arch>.AppImage` and `name_version_<arch>.deb` |
 
-The `.app` / AppImage / `.deb` include a jlink JRE (invoked via the JDK's absolute `jlink`, not PATH), the application uberjar, and the GPUI host. End users do not need Rust, Cargo, the Clojure CLI, or a system JDK.
+JVM packages include a jlink JRE (invoked via the JDK's absolute `jlink`, not PATH), the application uberjar, and the GPUI host. End users do not need Rust, Cargo, the Clojure CLI, or a system JDK.
+
+The [ClojureScript template](templates/cljs/) uses the same packager and native formats:
+
+```clojure
+{:name "my-app"
+ :backend :cljs
+ :cljs-build :app
+ :cljs-output "target/app.js"
+ :version "0.1.0"
+ :id "com.example.my-app"
+ :icon "resources/icon.png"}
+```
+
+Run `npm ci`, then `npm run package` (or `clj -X:build`) from the copied template.
+The packager runs shadow-cljs release, bundles a checksum-verified official
+Node runtime and the native host, and installs production dependencies from
+`package-lock.json` using that Node version. It copies `resources/` and retains
+Node/npm licenses. End users need no Node or JVM install. See the template's
+README for native addons, platform requirements, and launch paths. Node packaging
+supports macOS and Linux on x64/arm64; build on each target OS/architecture.
+
+`node scripts/check-cljs-package.cjs` builds the ClojureScript template, extracts
+or relocates its native packages, and exercises the released app's counter and
+npm dependency through a headless protocol peer with no system Node on `PATH`.
+CI runs this on both macOS and Linux after building the debug host.
 
 If the application repo has `LICENSE` and/or `NOTICE` at the root, those files are copied into the package:
 
@@ -645,6 +678,10 @@ codesign --deep --force --options runtime --sign "Developer ID Application: …"
 xcrun notarytool submit MyApp.app --wait --keychain-profile "notary"
 xcrun stapler staple MyApp.app
 ```
+
+For ClojureScript distribution, sign nested Node and native npm addons explicitly
+before signing the outer bundle, preserving Node's JIT entitlements. The commands
+above are only a starting point for JVM apps, not a complete Node signing workflow.
 
 ## License
 

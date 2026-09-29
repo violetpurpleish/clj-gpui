@@ -63,8 +63,15 @@
                  (edn/read-string (slurp file))))
          name (or (as-str (or (:name raw) (:app/name raw)))
                   (throw (ex-info "gpui.edn needs :name" {:config raw})))
-         main (or (as-str (or (:main raw) (:app/main raw)))
-                  (throw (ex-info "gpui.edn needs :main (e.g. my.app/app)" {:config raw})))
+         backend (or (:backend raw) :clj)
+         _ (when-not (#{:clj :cljs} backend)
+             (throw (ex-info "gpui.edn :backend must be :clj or :cljs" {:backend backend})))
+         main (as-str (or (:main raw) (:app/main raw)))
+         _ (when (and (= :clj backend) (not main))
+             (throw (ex-info "gpui.edn needs :main (e.g. my.app/app)" {:config raw})))
+         _ (when (and (= :cljs backend)
+                      (not (and (:cljs-build raw) (seq (:cljs-output raw)))))
+             (throw (ex-info "ClojureScript packaging needs :cljs-build and :cljs-output" {:config raw})))
          version (or (as-str (or (:version raw) (:app/version raw))) "0.1.0")
          id (or (as-str (or (:id raw) (:app/id raw)))
                 (str "com.cljgpui." name))
@@ -79,6 +86,7 @@
       (dissoc raw :app/name :app/version :app/main :app/id :app/icon
               :app/title :app/description :app/maintainer)
       {:name name
+       :backend backend
        :version version
        :main main
        :id id
@@ -182,7 +190,7 @@
 
 (defn- loaded-config?
   [opts]
-  (and (map? opts) (string? (:name opts)) (string? (:main opts))))
+  (and (map? opts) (string? (:name opts)) (instance? java.io.File (:target opts))))
 
 (defn host
   "Build the native GPUI host (`cargo build --release`) and return its path.
@@ -238,3 +246,15 @@
           "--output" (.getPath dest)]
          {})
     (assoc cfg :runtime dest)))
+
+(defn- sha256-hex
+  ^String [^java.io.File f]
+  (let [md (java.security.MessageDigest/getInstance "SHA-256")
+        buf (byte-array 8192)]
+    (with-open [^java.io.InputStream in (io/input-stream f)]
+      (loop []
+        (let [n (.read in buf)]
+          (when (pos? n)
+            (.update md buf 0 n)
+            (recur)))))
+    (format "%064x" (java.math.BigInteger. 1 (.digest md)))))

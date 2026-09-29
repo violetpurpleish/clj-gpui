@@ -1,4 +1,4 @@
-{:paths ["src"]
+{:paths ["src" "resources"]
  :deps {clj-gpui/clj-gpui {:local/root "../clj-gpui"}}
  :aliases
  {:dev {:main-opts ["-m" "gpui.dev" "my.app/app"]}

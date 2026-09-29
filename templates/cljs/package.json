@@ -1,0 +1,21 @@
+{
+  "name": "my-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "compile": "shadow-cljs compile app",
+    "watch": "shadow-cljs watch app",
+    "start": "node target/app.js",
+    "release": "shadow-cljs release app",
+    "package": "clojure -X:build"
+  },
+  "dependencies": {
+    "dayjs": "1.11.23"
+  },
+  "devDependencies": {
+    "shadow-cljs": "3.5.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
