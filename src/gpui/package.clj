@@ -21,7 +21,7 @@
 
   ClojureScript apps use :backend :cljs, :cljs-build :app and
   :cljs-output \"target/app.js\" instead of :main. This packages a shadow-cljs
-  release with Node and locked production npm dependencies, without tools.build
+  release with Bun and locked production npm dependencies, without tools.build
   or a JVM in the shipped app. See templates/cljs/.
 
   LICENSE and NOTICE at the application repo root are copied into the
@@ -42,5 +42,5 @@
 (def launcher-script launch/launcher-script)
 
 (load "package_build")
-(load "package_node")
+(load "package_bun")
 (load "package_native")

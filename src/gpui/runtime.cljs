@@ -1,5 +1,5 @@
 (ns gpui.runtime
-  "Node.js side of the native host protocol. Applications start with gpui.node."
+  "Bun/Node.js side of the native host protocol. Applications start with gpui.node."
   (:require [gpui.theme :as theme]
             [gpui.ui :as ui]
             [gpui.wire :as wire]))

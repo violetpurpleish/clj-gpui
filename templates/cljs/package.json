@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "compile": "shadow-cljs compile app",
-    "watch": "shadow-cljs watch app",
-    "start": "node target/app.js",
-    "release": "shadow-cljs release app",
+    "compile": "bun --no-install node_modules/shadow-cljs/cli/runner.js compile app",
+    "watch": "bun --no-install node_modules/shadow-cljs/cli/runner.js watch app",
+    "start": "bun --no-install target/app.js",
+    "release": "bun --no-install node_modules/shadow-cljs/cli/runner.js release app",
     "package": "clojure -X:build"
   },
   "dependencies": {
@@ -16,6 +16,7 @@
     "shadow-cljs": "3.5.3"
   },
   "engines": {
-    "node": ">=22"
-  }
+    "bun": ">=1.4.2"
+  },
+  "packageManager": "bun@1.4.2"
 }

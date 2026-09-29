@@ -13,7 +13,9 @@
      {:title "clj-gpui · ClojureScript" :chrome :app :width 540 :height 360 :theme :tokyo-night
       :padding 24 :gap 18}
      (ui/label (str "Hello, " name) {:font-size 26 :font-weight :bold})
-     (ui/label (str "Native GPUI + shadow-cljs + Node.js on " (os/platform)))
+     (ui/label (str "Native GPUI + shadow-cljs + "
+                    (if (.-bun (.-versions js/process)) "Bun" "Node.js")
+                    " on " (os/platform)))
      (ui/input name #(swap! !state assoc :name %) {:id "name" :placeholder "Your name"})
      (ui/hstack {:gap 12}
                 (ui/button "−" #(swap! !state update :count dec))

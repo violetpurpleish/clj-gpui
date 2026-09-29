@@ -11,18 +11,23 @@
    (fn [resolve reject]
      (let [state (r/atom "old")
            previous-mode (.. js/process -env -CLJ_GPUI_TEST_MODE)
+           previous-runtime (.. js/process -env -CLJ_GPUI_TEST_JS_RUNTIME)
            listeners (.listenerCount js/process "SIGTERM")
            options {:app #(ui/input @state {:on-change (fn [value] (reset! state value))})
-                    :host (path/resolve "test-cljs/fixtures/host.cjs")
+                    :host (path/resolve "test-cljs/fixtures/host.sh")
                     :connect-timeout-ms (if (= mode "timeout") 100 5000)
                     :on-exit (fn [code]
                                (if previous-mode
                                  (set! (.. js/process -env -CLJ_GPUI_TEST_MODE) previous-mode)
                                  (js-delete (.-env js/process) "CLJ_GPUI_TEST_MODE"))
+                               (if previous-runtime
+                                 (set! (.. js/process -env -CLJ_GPUI_TEST_JS_RUNTIME) previous-runtime)
+                                 (js-delete (.-env js/process) "CLJ_GPUI_TEST_JS_RUNTIME"))
                                (is (not (node/running?)))
                                (is (= listeners (.listenerCount js/process "SIGTERM")))
                                (resolve code))}]
        (set! (.. js/process -env -CLJ_GPUI_TEST_MODE) mode)
+       (set! (.. js/process -env -CLJ_GPUI_TEST_JS_RUNTIME) (.-execPath js/process))
        (try
          (let [ready (node/start! options)]
            ;; Repeated start updates the app, and never spawns a second host.

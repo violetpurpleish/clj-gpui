@@ -59,7 +59,8 @@ jobs:
             libxcb-xfixes0-dev \
             cmake \
             fakeroot \
-            dpkg-dev
+            dpkg-dev \
+            unzip
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -72,10 +73,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "22"
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -94,7 +91,7 @@ jobs:
             ~/.m2/repository
             ~/.gitlibs
             ~/.deps.clj
-          key: clj-${{ runner.os }}-${{ hashFiles('deps.edn', 'examples/**/deps.edn', 'templates/**/deps.edn', 'templates/cljs/package-lock.json', 'bun.lock', 'shadow-cljs.edn') }}
+          key: clj-${{ runner.os }}-${{ hashFiles('deps.edn', 'examples/**/deps.edn', 'templates/**/deps.edn', 'templates/cljs/bun.lock', 'bun.lock', 'shadow-cljs.edn') }}
           restore-keys: |
             clj-${{ runner.os }}-
 
@@ -102,7 +99,7 @@ jobs:
         run: ./scripts/ci.sh
 
       - name: ClojureScript template packages and relocated launch
-        run: node scripts/check-cljs-package.cjs
+        run: bun --no-install scripts/check-cljs-package.cjs
 
       - name: Production renderer pixel checks
         if: runner.os == 'macOS'

@@ -60,7 +60,7 @@
 
   Required :app is a thunk, e.g. #(app). Optional :host / CLJ_GPUI_BIN uses
   a prebuilt host; development can build from :root / CLJ_GPUI_ROOT.
-  :on-exit receives the host's exit code (defaults to exiting Node).
+  :on-exit receives the host's exit code (defaults to exiting the JS runtime).
   Calling again updates the root function without creating a second window."
   [{:keys [app app-id protocol-test? on-exit connect-timeout-ms]
     :or {app-id "ClojureScript" connect-timeout-ms 60000}

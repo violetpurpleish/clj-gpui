@@ -28,24 +28,24 @@
        "export JAVA_HOME=\"$java_home\"\n"
        "exec \"$java_home/bin/java\" -Djava.awt.headless=true -cp \"$jar\" gpui.prod " main "\n"))
 
-(defn- node-launcher-script []
+(defn- bun-launcher-script []
   (str "#!/bin/sh\n"
        "set -eu\n"
        "here=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
-       "if [ -x \"$here/../Resources/runtime/bin/node\" ]; then root=\"$here/../Resources\"\n"
-       "elif [ -x \"$here/../runtime/bin/node\" ]; then root=\"$here/..\"\n"
-       "else echo \"$0: bundled Node runtime not found\" >&2; exit 1; fi\n"
+       "if [ -x \"$here/../Resources/runtime/bin/bun\" ]; then root=\"$here/../Resources\"\n"
+       "elif [ -x \"$here/../runtime/bin/bun\" ]; then root=\"$here/..\"\n"
+       "else echo \"$0: bundled Bun runtime not found\" >&2; exit 1; fi\n"
        "root=$(CDPATH= cd -- \"$root\" && pwd)\n"
        "export CLJ_GPUI_BIN=\"$here/clj-gpui-host\"\n"
        "export CLJ_GPUI_APP_HOME=\"$root/app\"\n"
        "export NODE_ENV=production\n"
        "export PATH=\"$root/runtime/bin:$PATH\"\n"
        "cd \"$root/app\"\n"
-       "exec \"$root/runtime/bin/node\" \"$root/app/main.cjs\" \"$@\"\n"))
+       "exec \"$root/runtime/bin/bun\" --no-install \"$root/app/main.cjs\" \"$@\"\n"))
 
 (defn launcher-script
-  "POSIX launcher for a bundled JVM or ClojureScript/Node application."
+  "POSIX launcher for a bundled JVM or ClojureScript/Bun application."
   [cfg]
   (if (= :cljs (:backend cfg))
-    (node-launcher-script)
+    (bun-launcher-script)
     (jvm-launcher-script cfg)))

@@ -4,7 +4,7 @@
 
 A library for writing **native GPUI applications in Clojure or ClojureScript**.
 
-This is not a Clojure-like language, a Lisp-inspired DSL, or a toy interpreter. Application code is ordinary JVM Clojure or ClojureScript on Node.js: `def`, `defn`, `defonce`, atoms, `#()`, `map`, macros, namespaces. Rust owns the GPUI window and translates Clojure data into native [GPUI Kit](https://gpui-kit.com) widgets.
+This is not a Clojure-like language, a Lisp-inspired DSL, or a toy interpreter. Application code is ordinary JVM Clojure or ClojureScript on Bun: `def`, `defn`, `defonce`, atoms, `#()`, `map`, macros, namespaces. Rust owns the GPUI window and translates Clojure data into native [GPUI Kit](https://gpui-kit.com) widgets.
 
 There is no Clojars release yet. Depend on this repo with `:local/root` or a git SHA. GitHub Actions runs `./scripts/ci.sh` on Ubuntu and macOS (Rust unit plus production-renderer interaction tests, strict Clippy, Clojure and ClojureScript tests, cljfmt, and windowless socket protocol tests for both runtimes). macOS additionally runs the explicit offscreen Metal pixel target.
 
@@ -16,9 +16,9 @@ New in 0.7: `ui/toolbar`, `ui/questionnaire`, `ui/time-field`, date/time picking
 
 ![screenshot](https://i.imgur.com/gKXfCnx.png)
 
-## ClojureScript with npm
+## ClojureScript with Bun
 
-ClojureScript apps use shadow-cljs and Node.js to drive the same native widgets:
+ClojureScript apps use shadow-cljs and Bun to drive the same native widgets:
 
 ```sh
 bun install --frozen-lockfile
@@ -27,7 +27,7 @@ bun run cljs:start
 ```
 
 For hot reload, run `bun run cljs:watch` and start the app in a second terminal.
-The example uses `dayjs` from npm and Node's `os` module. Node-compatible npm
+The example uses `dayjs` from npm and Node's `os` module. Bun-compatible npm
 packages are supported; browser packages requiring a DOM need a different UI.
 See the [ClojureScript guide](docs/clojurescript.md) for setup, releases and the
 investigation of GPUI Shell. The JVM workflow below remains supported.
@@ -138,7 +138,7 @@ Until this is published, add a git or local dependency:
 ```
 
 Copy [`templates/clj/`](templates/clj/) as a JVM starting app. For ClojureScript,
-copy [`templates/cljs/`](templates/cljs/), which includes shadow-cljs, npm and
+copy [`templates/cljs/`](templates/cljs/), which includes shadow-cljs, Bun and
 native packaging. Both templates assume a sibling `clj-gpui` checkout by default.
 
 For the JVM template:
@@ -251,8 +251,8 @@ src/gpui/ratom.cljc          ; (r/atom ...)
 src/gpui/core.clj             ; compatibility re-export of gpui.ui
 src/gpui/wire.cljc            ; shared serialization and callbacks
 src/gpui/runtime.clj          ; JVM protocol, nREPL, watcher
-src/gpui/runtime.cljs         ; Node protocol and asynchronous providers
-src/gpui/node.cljs            ; Node launcher and host lifecycle
+src/gpui/runtime.cljs         ; JavaScript protocol and asynchronous providers
+src/gpui/node.cljs            ; Bun/Node-compatible launcher and host lifecycle
 src/gpui/host.clj             ; locate/build/spawn the native host
 src/gpui/dev.clj              ; development launcher (nREPL, watcher, Cargo)
 src/gpui/prod.clj             ; production launcher (no nREPL/watcher/Cargo)
@@ -580,10 +580,10 @@ JSON still works: put extra theme-set files (same schema as [GPUI Kit themes](ht
 
 ## Packaging
 
-A packaged app runs its code in a bundled JVM or Node runtime, alongside the
+A packaged app runs its code in a bundled JVM or Bun runtime, alongside the
 bundled GPUI host. Both release paths suppress development chrome and run without
 the compiler, source watcher, nREPL, or Cargo. The JVM configuration is shown
-below; the [ClojureScript template](templates/cljs/) includes its Node configuration.
+below; the [ClojureScript template](templates/cljs/) includes its Bun configuration.
 
 In the application repo, add `gpui.edn`:
 
@@ -642,18 +642,21 @@ The [ClojureScript template](templates/cljs/) uses the same packager and native 
  :icon "resources/icon.png"}
 ```
 
-Run `npm ci`, then `npm run package` (or `clj -X:build`) from the copied template.
-The packager runs shadow-cljs release, bundles a checksum-verified official
-Node runtime and the native host, and installs production dependencies from
-`package-lock.json` using that Node version. It copies `resources/` and retains
-Node/npm licenses. End users need no Node or JVM install. See the template's
-README for native addons, platform requirements, and launch paths. Node packaging
-supports macOS and Linux on x64/arm64; build on each target OS/architecture.
+Run `bun install --frozen-lockfile`, then `bun run package` (or `clj -X:build`)
+from the copied template. The packager runs shadow-cljs release, bundles a
+checksum-verified Bun runtime and native host, and installs production dependencies
+from `bun.lock` using that Bun version. It uses Bun's built-in trusted-dependency
+list unless the application explicitly overrides it. Packaged apps disable Bun's
+automatic package installation. Neither the npm CLI nor Node.js is required.
 
-`node scripts/check-cljs-package.cjs` builds the ClojureScript template, extracts
-or relocates its native packages, and exercises the released app's counter and
-npm dependency through a headless protocol peer with no system Node on `PATH`.
-CI runs this on both macOS and Linux after building the debug host.
+It copies `resources/` and upstream runtime/package license notices. See the
+template README for native addon compatibility and launch paths. Bun packaging
+supports macOS 13+ and Linux on x64/arm64; build on each target OS/architecture.
+
+`bun --no-install scripts/check-cljs-package.cjs` builds the ClojureScript template,
+extracts or relocates its native packages, and exercises the released app's counter
+and npm dependency through a headless protocol peer with no system Bun or Node on
+`PATH`. CI runs this on macOS and Linux after building the debug host.
 
 If the application repo has `LICENSE` and/or `NOTICE` at the root, those files are copied into the package:
 
@@ -679,9 +682,9 @@ xcrun notarytool submit MyApp.app --wait --keychain-profile "notary"
 xcrun stapler staple MyApp.app
 ```
 
-For ClojureScript distribution, sign nested Node and native npm addons explicitly
-before signing the outer bundle, preserving Node's JIT entitlements. The commands
-above are only a starting point for JVM apps, not a complete Node signing workflow.
+For ClojureScript distribution, sign nested Bun and native npm addons explicitly
+before signing the outer bundle, preserving Bun's JIT entitlements. The commands
+above are only a starting point for JVM apps, not a complete Bun signing workflow.
 
 ## License
 

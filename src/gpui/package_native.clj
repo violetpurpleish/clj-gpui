@@ -1,5 +1,5 @@
 (defn info-plist
-  [{:keys [name title version id]}]
+  [{:keys [name title version id backend]}]
   (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
        "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
@@ -14,7 +14,8 @@
        "  <key>CFBundleIconFile</key><string>" (xml-escape name) "</string>\n"
        "  <key>CFBundlePackageType</key><string>APPL</string>\n"
        "  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>\n"
-       "  <key>LSMinimumSystemVersion</key><string>12.0</string>\n"
+       "  <key>LSMinimumSystemVersion</key><string>"
+       (if (= :cljs backend) "13.0" "12.0") "</string>\n"
        "  <key>NSHighResolutionCapable</key><true/>\n"
        "  <key>NSSupportsAutomaticTermination</key><false/>\n"
        "</dict>\n"
@@ -271,7 +272,7 @@
        "Depends: libc6, libstdc++6, libgcc-s1, libvulkan1, libxkbcommon0, libwayland-client0 | libx11-6\n"
        "Description: " description "\n"
        " Native GPUI application packaged with a bundled "
-       (if (= :cljs backend) "Node.js" "Java") " runtime\n"
+       (if (= :cljs backend) "Bun" "Java") " runtime\n"
        " and GPUI host. Development tools (Cargo, Clojure CLI, JDK) are\n"
        " not required at runtime.\n"))
 
@@ -279,7 +280,7 @@
   [opts]
   (when (not= (os-key) :linux)
     (throw (ex-info ".deb packaging must run on Linux." {:os (os-key)})))
-  (let [cfg (if (or (:jar opts) (:node-app opts))
+  (let [cfg (if (or (:jar opts) (:bun-app opts))
               opts
               (prepare-package opts))
         arch (:deb (linux-arch))

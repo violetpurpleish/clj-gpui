@@ -1,12 +1,12 @@
-#!/usr/bin/env node
-// Real released template + bundled Node/npm, with a headless protocol peer.
+#!/usr/bin/env bun
+// Real released template + bundled Bun, with a headless protocol peer.
 const fs = require('node:fs');
 const net = require('node:net');
 const readline = require('node:readline');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const {createRequire} = require('node:module');
-assert.equal(fs.realpathSync(process.execPath), fs.realpathSync(process.env.CLJ_GPUI_PACKAGE_EXPECT_NODE));
+assert.equal(fs.realpathSync(process.execPath), fs.realpathSync(process.env.CLJ_GPUI_PACKAGE_EXPECT_BUN));
 assert.equal(fs.realpathSync(process.cwd()), fs.realpathSync(process.env.CLJ_GPUI_PACKAGE_EXPECT_APP));
 assert.equal(process.env.NODE_ENV, 'production');
 assert.equal(process.env.CLJ_GPUI_APP_HOME, process.env.CLJ_GPUI_PACKAGE_EXPECT_APP);

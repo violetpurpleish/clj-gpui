@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // Build the copyable starter and exercise its relocated packages without a GPU.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -6,7 +6,7 @@ const cp = require('node:child_process');
 const assert = require('node:assert/strict');
 
 const root = path.resolve(__dirname, '..');
-const scratch = path.join(root, 'target', 'cljs-package-test');
+const scratch = path.join(root, 'target', 'cljs-bun-package-test');
 const project = path.join(scratch, 'app source');
 const host = process.env.CLJ_GPUI_BIN || path.join(root, 'host/target/debug/clj-gpui');
 fs.accessSync(host, fs.constants.X_OK);
@@ -27,7 +27,7 @@ function run(command, args, options = {}) {
   assert.equal(result.status, 0, `${command} ${args.join(' ')} failed (${result.signal})`);
 }
 
-run('npm', ['ci', '--no-audit', '--no-fund']);
+run(process.execPath, ['install', '--frozen-lockfile']);
 // Subsequent invocations must replace stale payload files without manual cleanup.
 const stale = path.join(project, 'target/cljs-app/stale-from-previous-package');
 if (fs.existsSync(path.dirname(stale))) fs.writeFileSync(stale, 'must not ship');
@@ -40,16 +40,20 @@ fs.mkdirSync(moved, {recursive: true});
 
 function checkPayload(base, launcher, hostFile) {
   const app = path.join(base, 'app');
-  const node = path.join(base, 'runtime/bin/node');
-  fs.accessSync(node, fs.constants.X_OK);
+  const bun = path.join(base, 'runtime/bin/bun');
+  fs.accessSync(bun, fs.constants.X_OK);
   fs.accessSync(hostFile, fs.constants.X_OK);
-  assert(fs.existsSync(path.join(base, 'runtime/LICENSE')));
+  assert(fs.existsSync(path.join(base, 'runtime/LICENSE.md')));
   assert(fs.existsSync(path.join(app, 'resources/icon.png')));
   assert(!fs.readFileSync(path.join(app, 'main.cjs'), 'utf8').includes(root),
     'release JavaScript must omit the compile-time development checkout path');
   assert(fs.existsSync(path.join(app, 'node_modules/dayjs/dayjs.min.js')));
   assert(!fs.existsSync(path.join(app, 'node_modules/shadow-cljs')));
   assert(!fs.existsSync(path.join(base, 'runtime/bin/java')));
+  assert(!fs.existsSync(path.join(base, 'runtime/bin/node')));
+  assert(!fs.existsSync(path.join(app, 'package-lock.json')));
+  const manifest = JSON.parse(fs.readFileSync(path.join(app, 'package.json'), 'utf8'));
+  assert(!Object.hasOwn(manifest, 'trustedDependencies'), 'use Bun’s built-in trusted list');
   // Only the relocated test copy gets a protocol peer in place of the GPU host.
   fs.copyFileSync(path.join(__dirname, 'fixtures/template-host.cjs'), hostFile);
   fs.chmodSync(hostFile, 0o755);
@@ -57,7 +61,7 @@ function checkPayload(base, launcher, hostFile) {
     cwd: scratch, timeout: 30000,
     env: {...process.env, PATH: '/usr/bin:/bin', NODE_PATH: '',
       CLJ_GPUI_BIN: '/invalid/external/host',
-      CLJ_GPUI_PACKAGE_EXPECT_NODE: node,
+      CLJ_GPUI_PACKAGE_EXPECT_BUN: bun,
       CLJ_GPUI_PACKAGE_EXPECT_APP: app},
   });
 }
