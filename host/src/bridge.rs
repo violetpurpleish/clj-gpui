@@ -1,5 +1,5 @@
 use crate::catalog;
-use crate::protocol::{Cmd, HostEvent, Node, PROTOCOL_VERSION};
+use crate::protocol::{Cmd, HostEvent, Node, PROTOCOL_VERSION, nrepl_status};
 use anyhow::{Context, Result, bail};
 use gpui_kit::component as gpui_component;
 use serde_json::{Value, json};
@@ -159,7 +159,7 @@ fn connect_to_clojure() -> Result<TcpStream> {
     let port = std::env::var("CLJ_GPUI_PORT")
         .context("CLJ_GPUI_PORT is not set. Start the app with `clj -M:dev my.app/app`.")?;
     let addr = format!("{host}:{port}");
-    println!("[host] connecting to Clojure at {addr}");
+    println!("[host] connecting to app at {addr}");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         match TcpStream::connect(&addr) {
@@ -286,15 +286,16 @@ fn attach(stream: TcpStream) -> Result<ClojureHost> {
                         }
                     }
                 }
-                println!("[host] Clojure socket closed");
+                println!("[host] app socket closed");
             }
         })?;
 
     let (nrepl_port, app) = ready_rx
         .recv_timeout(Duration::from_secs(30))
-        .context("timed out waiting for Clojure :ready")?;
+        .context("timed out waiting for app :ready")?;
     println!(
-        "[host] Clojure ready app={app} protocol={PROTOCOL_VERSION} nREPL=127.0.0.1:{nrepl_port}"
+        "[host] app ready app={app} protocol={PROTOCOL_VERSION} {}",
+        nrepl_status(nrepl_port)
     );
 
     thread::Builder::new()

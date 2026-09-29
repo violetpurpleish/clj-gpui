@@ -1060,7 +1060,8 @@ impl RootView {
                     match event {
                         HostEvent::Ready { nrepl_port, .. } => {
                             view.nrepl_port = nrepl_port;
-                            view.status = format!("nREPL 127.0.0.1:{nrepl_port} · connected");
+                            view.status =
+                                format!("{} · connected", protocol::nrepl_status(nrepl_port));
                         }
                         HostEvent::Tree(mut tree, seq, themes) => {
                             overlay::scope_content_paths(&mut tree, "root");
@@ -1116,10 +1117,8 @@ impl RootView {
                                 view.flush_input_change(&key, kind);
                             }
                             view.error = None;
-                            view.status = format!(
-                                "nREPL 127.0.0.1:{} · live · hot reload on",
-                                view.nrepl_port
-                            );
+                            view.status =
+                                format!("{} · live", protocol::nrepl_status(view.nrepl_port));
                         }
                         HostEvent::RenderRequested => {
                             view.callback_queue.render_requested();
@@ -1173,7 +1172,7 @@ impl RootView {
             custom_title_bar: None,
             tree_revision: 0,
             tree_overlays: TreeOverlays::default(),
-            status: format!("nREPL 127.0.0.1:{nrepl_port} · loading Clojure UI"),
+            status: format!("{} · loading UI", protocol::nrepl_status(nrepl_port)),
             error: None,
             nrepl_port,
             cmd_tx,
@@ -7345,7 +7344,7 @@ impl Render for RootView {
                         .id("clojure-error")
                         .test_support()
                         .text_color(cx.theme().danger)
-                        .child("Clojure error"),
+                        .child("Application error"),
                 )
                 .child(div().text_color(cx.theme().foreground).child(error))
                 .into_any_element()
@@ -7354,7 +7353,7 @@ impl Render for RootView {
         } else {
             div()
                 .text_color(cx.theme().muted_foreground)
-                .child("Waiting for Clojure to render…")
+                .child("Waiting for app to render…")
                 .into_any_element()
         };
 

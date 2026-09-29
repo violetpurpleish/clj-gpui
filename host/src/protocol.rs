@@ -4,6 +4,15 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::hash::{Hash, Hasher};
 
+/// A zero port in the ready message means the app does not expose nREPL.
+pub fn nrepl_status(port: u16) -> String {
+    if port == 0 {
+        "nREPL=disabled".into()
+    } else {
+        format!("nREPL=127.0.0.1:{port}")
+    }
+}
+
 /// A number, or a linear interpolation of Kit `NavPage::progress()` (`0..=1`).
 ///
 /// `{from, to}` is `from + (to - from) * progress`, the data form of the
