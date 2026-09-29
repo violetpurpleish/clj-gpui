@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Headless checks used by GitHub Actions. Assumes cargo, java, and the Clojure CLI.
+# Headless checks used by GitHub Actions. Assumes cargo, java, Clojure CLI, Bun, and installed npm dependencies.
 # Builds a debug host so protocol-test does not pay for `cargo build --release`.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -34,3 +34,16 @@ clojure -M:cljfmt check
 
 echo "==> clojure -M:protocol-test"
 clojure -M:protocol-test
+
+echo "==> ClojureScript compile"
+bun --no-install node_modules/shadow-cljs/cli/runner.js compile test protocol
+
+echo "==> ClojureScript tests"
+bun --no-install target/cljs-tests.js
+
+echo "==> ClojureScript protocol test"
+bun --no-install target/cljs-protocol.js
+
+echo "==> Optimized ClojureScript protocol test"
+bun --no-install node_modules/shadow-cljs/cli/runner.js release protocol
+bun --no-install target/cljs-protocol.js

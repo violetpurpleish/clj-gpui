@@ -1,0 +1,9 @@
+{:name "my-app"
+ :version "0.1.0"
+ :backend :cljs
+ :cljs-build :app
+ :cljs-output "target/app.js"
+ :id "com.example.my-app"
+ :title "My App"
+ :description "A native GPUI application powered by ClojureScript"
+ :icon "resources/icon.png"}

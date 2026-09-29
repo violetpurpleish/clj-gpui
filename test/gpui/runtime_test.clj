@@ -135,6 +135,25 @@
         (.delete (.getParentFile f))
         (.delete src)))))
 
+(deftest shared-cljc-sources-are-watched-and-read-as-clojure
+  (let [src (doto (io/file (System/getProperty "java.io.tmpdir")
+                           (str "clj-gpui-cljc-" (random-uuid)))
+              (.mkdirs))
+        shared (io/file src "shared.cljc")
+        js-only (io/file src "node.cljs")]
+    (try
+      (spit shared "(ns actual.shared #?(:clj (:require [clojure.string])))\n")
+      (spit js-only "(ns node)\n")
+      (is (= 'actual.shared (runtime/ns-from-file src shared)))
+      (is (= [shared] (#'runtime/clj-files src)))
+      (spit shared "(defn unfinished")
+      (is (= 'shared (runtime/ns-from-file src shared))
+          "path fallback strips the .cljc extension")
+      (finally
+        (.delete shared)
+        (.delete js-only)
+        (.delete src)))))
+
 (deftest changed-clj-files-detects-new-and-updated
   (let [a "/tmp/a.clj"
         b "/tmp/b.clj"]

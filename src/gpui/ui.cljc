@@ -75,7 +75,7 @@
   "Watch key installed by `watch!` / `ratom`. Stable even if this ns is renamed."
   :gpui.ratom/watch)
 
-(defonce ^:private request-render-impl (clojure.core/atom nil))
+(defonce ^:private request-render-impl (atom nil))
 
 (defn set-request-render!
   "Used by the runtime to install the host notification hook.
@@ -110,9 +110,9 @@
 
   Prefer requiring `[gpui.ratom :as r]` and writing `(r/atom 0)`."
   ([x]
-   (watch! (clojure.core/atom x)))
+   (watch! (atom x)))
   ([x & options]
-   (watch! (apply clojure.core/atom x options))))
+   (watch! (apply atom x options))))
 
 (defn ui-node?
   "True when `x` is a GPUI element map produced by this namespace."
@@ -219,7 +219,8 @@
     (let [parts (keep format-option-id id)]
       (when (seq parts)
         (apply str (interpose "/" parts))))
-    (instance? clojure.lang.Named id) (name id)
+    #?(:clj (instance? clojure.lang.Named id)
+       :cljs (satisfies? INamed id)) (name id)
     :else (str id)))
 
 (defn- wrap-option-callback

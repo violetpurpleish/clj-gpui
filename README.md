@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/violetpurpleish/clj-gpui/actions/workflows/ci.yml/badge.svg)](https://github.com/violetpurpleish/clj-gpui/actions/workflows/ci.yml)
 
-A library for writing **native GPUI applications in real Clojure**.
+A library for writing **native GPUI applications in Clojure or ClojureScript**.
 
-This is not a Clojure-like language, a Lisp-inspired DSL, or a toy interpreter. Application code is ordinary JVM Clojure: `def`, `defn`, `defonce`, atoms, `#()`, `map`, macros, namespaces. Rust owns the GPUI window and translates Clojure data into native [GPUI Kit](https://gpui-kit.com) widgets.
+This is not a Clojure-like language, a Lisp-inspired DSL, or a toy interpreter. Application code is ordinary JVM Clojure or ClojureScript on Bun: `def`, `defn`, `defonce`, atoms, `#()`, `map`, macros, namespaces. Rust owns the GPUI window and translates Clojure data into native [GPUI Kit](https://gpui-kit.com) widgets.
 
-There is no Clojars release yet. Depend on this repo with `:local/root` or a git SHA. GitHub Actions runs `./scripts/ci.sh` on Ubuntu and macOS (Rust unit plus production-renderer interaction tests, strict Clippy, Clojure tests, cljfmt, and the windowless socket protocol test). macOS additionally runs the explicit offscreen Metal pixel target.
+There is no Clojars release yet. Depend on this repo with `:local/root` or a git SHA. GitHub Actions runs `./scripts/ci.sh` on Ubuntu and macOS (Rust unit plus production-renderer interaction tests, strict Clippy, Clojure and ClojureScript tests, cljfmt, and windowless socket protocol tests for both runtimes). macOS additionally runs the explicit offscreen Metal pixel target.
 
 The host uses GPUI Kit 0.7.0 and GPUI 0.3.7. See the [migration notes](docs/gpui-kit-0.7.0-migration.md) for compatibility and validation details.
 
@@ -15,6 +15,22 @@ New in 0.7: `ui/toolbar`, `ui/questionnaire`, `ui/time-field`, date/time picking
 `ui/window` supports optional [`:on-missing-glyphs` font diagnostics](docs/font-diagnostics.md). Delivery depends on the native text backend; the linked guide records the platform support audit.
 
 ![screenshot](https://i.imgur.com/gKXfCnx.png)
+
+## ClojureScript with Bun
+
+ClojureScript apps use shadow-cljs and Bun to drive the same native widgets:
+
+```sh
+bun install --frozen-lockfile
+bun run cljs:compile
+bun run cljs:start
+```
+
+For hot reload, run `bun run cljs:watch` and start the app in a second terminal.
+The example uses `dayjs` from npm and Node's `os` module. Bun-compatible npm
+packages are supported; browser packages requiring a DOM need a different UI.
+See the [ClojureScript guide](docs/clojurescript.md) for setup, releases and the
+investigation of GPUI Shell. The JVM workflow below remains supported.
 
 ## Quick start
 
@@ -121,7 +137,11 @@ Until this is published, add a git or local dependency:
                            :git/sha "REPLACE_WITH_SHA"}}}
 ```
 
-Copy `template/` as a starting app. Then:
+Copy [`templates/clj/`](templates/clj/) as a JVM starting app. For ClojureScript,
+copy [`templates/cljs/`](templates/cljs/), which includes shadow-cljs, Bun and
+native packaging. Both templates assume a sibling `clj-gpui` checkout by default.
+
+For the JVM template:
 
 ```bash
 clj -M:dev
@@ -211,7 +231,7 @@ If `app` throws, or if reload itself fails (syntax error, unmatched delimiter, u
 
 ## Formatting
 
-Clojure is formatted with [cljfmt](https://github.com/weavejester/cljfmt) using [community indentation](https://guide.clojure.style/#one-space-indent) (one space when arguments start on the next line). Config is `.cljfmt.edn`. It covers `src/`, `test/`, `examples/`, and `template/`.
+Clojure is formatted with [cljfmt](https://github.com/weavejester/cljfmt) using [community indentation](https://guide.clojure.style/#one-space-indent) (one space when arguments start on the next line). Config is `.cljfmt.edn`. It covers `src/`, `test/`, `test-cljs/`, `examples/`, and `templates/`.
 
 ```bash
 clojure -M:cljfmt check
@@ -225,15 +245,18 @@ The native host is ordinary Rust: `cargo fmt` in `host/` if you touch it.
 ```text
 deps.edn                      ; git-dep library entry
 .cljfmt.edn                   ; cljfmt paths and community indentation
-src/gpui/ui.clj               ; public widgets
-src/gpui/theme.clj            ; register custom GPUI Kit ThemeSets
-src/gpui/ratom.clj            ; (r/atom ...)
+src/gpui/ui.cljc             ; public widgets
+src/gpui/theme.cljc          ; register custom GPUI Kit ThemeSets
+src/gpui/ratom.cljc          ; (r/atom ...)
 src/gpui/core.clj             ; compatibility re-export of gpui.ui
-src/gpui/runtime.clj          ; protocol, callbacks, nREPL, watcher
+src/gpui/wire.cljc            ; shared serialization and callbacks
+src/gpui/runtime.clj          ; JVM protocol, nREPL, watcher
+src/gpui/runtime.cljs         ; JavaScript protocol and asynchronous providers
+src/gpui/node.cljs            ; Bun/Node-compatible launcher and host lifecycle
 src/gpui/host.clj             ; locate/build/spawn the native host
 src/gpui/dev.clj              ; development launcher (nREPL, watcher, Cargo)
 src/gpui/prod.clj             ; production launcher (no nREPL/watcher/Cargo)
-src/gpui/platform.clj         ; folder picker, reveal/open path
+src/gpui/platform.cljc       ; folder picker, reveal/open path
 src/gpui/package.clj          ; `clj -X:build package`
 host/                         ; native GPUI Kit host
 host/themes/                  ; bundled GPUI Kit palettes (Tokyo Night, Ayu, …)
@@ -241,7 +264,8 @@ examples/counter/             ; plain counter
 examples/widgets/             ; gallery of newly supported widgets
 examples/todomvc/             ; classic TodoMVC layout
 examples/themes/              ; custom ThemeSet (Catppuccin Violet)
-template/                     ; copyable app skeleton
+templates/clj/                ; copyable JVM app with native packaging
+templates/cljs/               ; copyable shadow-cljs/npm app with native packaging
 test/                         ; unit tests + gpui.test-app
 docs/protocol.md
 docs/gpui-component.md        ; coverage inventory vs GPUI Kit 0.6
@@ -556,7 +580,10 @@ JSON still works: put extra theme-set files (same schema as [GPUI Kit themes](ht
 
 ## Packaging
 
-A packaged app is still two processes: a bundled JRE running `gpui.prod`, plus the bundled GPUI host. `gpui.prod` does **not** start nREPL, watch source, or invoke Cargo, and it always suppresses the development footer and FPS HUD even when the application uses `:chrome :dev` locally.
+A packaged app runs its code in a bundled JVM or Bun runtime, alongside the
+bundled GPUI host. Both release paths suppress development chrome and run without
+the compiler, source watcher, nREPL, or Cargo. The JVM configuration is shown
+below; the [ClojureScript template](templates/cljs/) includes its Bun configuration.
 
 In the application repo, add `gpui.edn`:
 
@@ -586,7 +613,7 @@ Then, on the target OS:
 clj -X:build package
 ```
 
-The project template and every checked-in example already contain a `gpui.edn` and this build alias. For a packaged-app smoke test on macOS:
+The JVM template and JVM examples already contain a `gpui.edn` and this build alias. For a packaged-app smoke test on macOS:
 
 ```bash
 cd examples/widgets
@@ -601,7 +628,35 @@ Use `-X` (not `-T`): `gpui.package` lives in the clj-gpui library, so the projec
 | macOS | `Name.app` |
 | Linux | `name-version-<arch>.AppImage` and `name_version_<arch>.deb` |
 
-The `.app` / AppImage / `.deb` include a jlink JRE (invoked via the JDK's absolute `jlink`, not PATH), the application uberjar, and the GPUI host. End users do not need Rust, Cargo, the Clojure CLI, or a system JDK.
+JVM packages include a jlink JRE (invoked via the JDK's absolute `jlink`, not PATH), the application uberjar, and the GPUI host. End users do not need Rust, Cargo, the Clojure CLI, or a system JDK.
+
+The [ClojureScript template](templates/cljs/) uses the same packager and native formats:
+
+```clojure
+{:name "my-app"
+ :backend :cljs
+ :cljs-build :app
+ :cljs-output "target/app.js"
+ :version "0.1.0"
+ :id "com.example.my-app"
+ :icon "resources/icon.png"}
+```
+
+Run `bun install --frozen-lockfile`, then `bun run package` (or `clj -X:build`)
+from the copied template. The packager runs shadow-cljs release, bundles a
+checksum-verified Bun runtime and native host, and installs production dependencies
+from `bun.lock` using that Bun version. It uses Bun's built-in trusted-dependency
+list unless the application explicitly overrides it. Packaged apps disable Bun's
+automatic package installation. Neither the npm CLI nor Node.js is required.
+
+It copies `resources/` and upstream runtime/package license notices. See the
+template README for native addon compatibility and launch paths. Bun packaging
+supports macOS 13+ and Linux on x64/arm64; build on each target OS/architecture.
+
+`bun --no-install scripts/check-cljs-package.cjs` builds the ClojureScript template,
+extracts or relocates its native packages, and exercises the released app's counter
+and npm dependency through a headless protocol peer with no system Bun or Node on
+`PATH`. CI runs this on macOS and Linux after building the debug host.
 
 If the application repo has `LICENSE` and/or `NOTICE` at the root, those files are copied into the package:
 
@@ -626,6 +681,10 @@ codesign --deep --force --options runtime --sign "Developer ID Application: …"
 xcrun notarytool submit MyApp.app --wait --keychain-profile "notary"
 xcrun stapler staple MyApp.app
 ```
+
+For ClojureScript distribution, sign nested Bun and native npm addons explicitly
+before signing the outer bundle, preserving Bun's JIT entitlements. The commands
+above are only a starting point for JVM apps, not a complete Bun signing workflow.
 
 ## License
 

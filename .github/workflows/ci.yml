@@ -57,7 +57,10 @@ jobs:
             libxcb-render0-dev \
             libxcb-shape0-dev \
             libxcb-xfixes0-dev \
-            cmake
+            cmake \
+            fakeroot \
+            dpkg-dev \
+            unzip
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -71,6 +74,13 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install ClojureScript tooling
+        run: bun install --frozen-lockfile
+
       - uses: DeLaGuardo/setup-clojure@13.6.1
         with:
           cli: latest
@@ -81,12 +91,15 @@ jobs:
             ~/.m2/repository
             ~/.gitlibs
             ~/.deps.clj
-          key: clj-${{ runner.os }}-${{ hashFiles('deps.edn', 'examples/**/deps.edn', 'template/deps.edn') }}
+          key: clj-${{ runner.os }}-${{ hashFiles('deps.edn', 'examples/**/deps.edn', 'templates/**/deps.edn', 'templates/cljs/bun.lock', 'bun.lock', 'shadow-cljs.edn') }}
           restore-keys: |
             clj-${{ runner.os }}-
 
       - name: Tests
         run: ./scripts/ci.sh
+
+      - name: ClojureScript template packages and relocated launch
+        run: bun --no-install scripts/check-cljs-package.cjs
 
       - name: Production renderer pixel checks
         if: runner.os == 'macOS'

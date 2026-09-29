@@ -14,9 +14,11 @@
   `-` / `_` as spaces, collapse whitespace. `(ui/themes)` remains the
   palettes *shipped* with clj-gpui. Use `registered` / `available-names`
   for sets registered here."
-  (:require [clojure.data.json :as json]
+  (:require #?(:clj [clojure.data.json :as json])
             [clojure.string :as str]
-            [clojure.java.io :as io]))
+            #?(:clj [clojure.java.io :as io])
+            #?(:cljs ["node:fs" :as fs])
+            #?(:cljs ["node:path" :as path])))
 
 ;; Insertion order is the wire order. First ThemeSet wins on a duplicate
 ;; variant name once the host installs the array.
@@ -208,16 +210,22 @@
 (defn json-str
   "gpui-component theme-file JSON for a ThemeSet (or a registered name)."
   [theme-set-or-name]
-  (json/write-str (resolve-set theme-set-or-name) :escape-slash false))
+  #?(:clj (json/write-str (resolve-set theme-set-or-name) :escape-slash false)
+     :cljs (js/JSON.stringify (clj->js (resolve-set theme-set-or-name)))))
 
 (defn write-json
   "Write a ThemeSet as gpui-component JSON to `path`."
   [theme-set-or-name path]
-  (let [file (io/file path)
-        body (with-out-str
-               (json/pprint (resolve-set theme-set-or-name)
-                            :escape-slash false))]
-    (when-let [parent (.getParentFile file)]
-      (.mkdirs parent))
-    (spit file body)
-    file))
+  #?(:clj
+     (let [file (io/file path)
+           body (with-out-str
+                  (json/pprint (resolve-set theme-set-or-name) :escape-slash false))]
+       (when-let [parent (.getParentFile file)]
+         (.mkdirs parent))
+       (spit file body)
+       file)
+     :cljs
+     (let [file (path/resolve (str path))]
+       (fs/mkdirSync (path/dirname file) #js {:recursive true})
+       (fs/writeFileSync file (js/JSON.stringify (clj->js (resolve-set theme-set-or-name)) nil 2) "utf8")
+       file)))

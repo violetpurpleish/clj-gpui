@@ -3,4 +3,5 @@
  :main my.app/app
  :id "com.example.my-app"
  :title "My App"
+ :icon "resources/icon.png"
  :description "A native GPUI application"}

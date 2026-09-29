@@ -33,7 +33,7 @@
 
 (deftest template-and-examples-include-packaging-entry-points
   (doseq [[dir expected-name expected-main]
-          [["template" "my-app" "my.app/app"]
+          [["templates/clj" "my-app" "my.app/app"]
            ["examples/counter" "counter" "counter.app/app"]
            ["examples/todomvc" "todomvc" "todomvc.app/app"]
            ["examples/widgets" "widgets" "widgets.app/app"]
@@ -200,3 +200,168 @@
     (is (string? (:deb arch)))
     (is (string? (:appimage arch)))
     (is (seq (:deb arch)))))
+
+(deftest cljs-config-and-template-use-the-same-shadow-build
+  (let [cfg (pkg/load-config {:file "templates/cljs/gpui.edn"})
+        deps (edn/read-string (slurp "templates/cljs/deps.edn"))
+        shadow (edn/read-string (slurp "templates/cljs/shadow-cljs.edn"))
+        build (get-in shadow [:builds (:cljs-build cfg)])]
+    (is (= :cljs (:backend cfg)))
+    (is (nil? (:main cfg)))
+    (is (= :node-script (:target build)))
+    (is (= (:cljs-output cfg) (:output-to build)))
+    (is (= [:cljs] (get-in shadow [:deps :aliases])))
+    (is (= "3.5.3" (get-in deps [:aliases :cljs :extra-deps 'thheller/shadow-cljs :mvn/version])))
+    (is (= 'gpui.package/package (get-in deps [:aliases :build :exec-fn])))
+    (is (.isFile (io/file "templates/cljs/bun.lock")))
+    (is (.isFile (io/file "templates/cljs" (:icon cfg)))))
+  (is (thrown-with-msg? Exception #"needs :main" (pkg/load-config {:name "app"})))
+  (is (thrown-with-msg? Exception #":cljs-build and :cljs-output"
+                        (pkg/load-config {:name "app" :backend :cljs})))
+  (is (thrown-with-msg? Exception #":backend"
+                        (pkg/load-config {:name "app" :backend :unknown}))))
+
+(deftest bun-distributions-have-platform-specific-integrity-pins
+  (doseq [platform ["darwin-aarch64" "darwin-x64-baseline" "linux-aarch64" "linux-x64-baseline"]]
+    (is (re-matches #"[a-f0-9]{64}" (get pkg/bun-sha256 platform)))
+    (is (str/ends-with? (pkg/bun-download-url platform)
+                        (str "/bun-v" pkg/bun-version "/bun-" platform ".zip"))))
+  (is (contains? pkg/bun-sha256 (pkg/bun-platform))))
+
+(deftest bun-packages-require-macos-13
+  (is (str/includes? (pkg/info-plist {:backend :cljs})
+                     "<key>LSMinimumSystemVersion</key><string>13.0</string>"))
+  (is (str/includes? (pkg/info-plist {})
+                     "<key>LSMinimumSystemVersion</key><string>12.0</string>")))
+
+(defn- delete-tree! [dir]
+  (doseq [f (reverse (file-seq dir))] (io/delete-file f true)))
+
+(deftest bun-launchers-run-relocated-layouts-and-forward-arguments
+  ;; Real POSIX execution catches quoting, working-directory and PATH mistakes
+  ;; that inspecting generated shell text cannot detect.
+  (doseq [[bin-path payload-path] [["My App.app/Contents/MacOS" "My App.app/Contents/Resources"]
+                                   ["My App.AppDir/usr/bin" "My App.AppDir/usr"]
+                                   ["deb/usr/lib/my-app/bin" "deb/usr/lib/my-app"]]]
+    (let [dir (io/file (System/getProperty "java.io.tmpdir") (str "gpui launcher's " (random-uuid)))
+          bin (io/file dir bin-path)
+          payload (io/file dir payload-path)
+          runtime-bin (io/file payload "runtime/bin")
+          app (io/file payload "app")
+          node (io/file runtime-bin "bun")
+          launcher (io/file bin "my-app")]
+      (try
+        (doseq [f [bin runtime-bin app]] (.mkdirs ^java.io.File f))
+        (spit node (str "#!/bin/sh\nset -eu\n"
+                        "[ \"$PWD\" = \"$CLJ_GPUI_APP_HOME\" ]\n"
+                        "[ \"$NODE_ENV\" = production ]\n"
+                        "[ \"$(command -v bun)\" = \"$0\" ]\n"
+                        "[ -f \"$CLJ_GPUI_BIN\" ]\n"
+                        "[ \"$1\" = --no-install ]\n"
+                        "[ \"$2\" = \"$PWD/main.cjs\" ]\n"
+                        "[ \"$3\" = 'argument with spaces' ]\n"
+                        "exit 37\n"))
+        (.setExecutable node true)
+        (spit (io/file bin "clj-gpui-host") "host")
+        (spit launcher (pkg/launcher-script {:backend :cljs}))
+        (is (sh-n-ok? (slurp launcher)))
+        (let [pb (doto (ProcessBuilder. ["/bin/sh" (.getPath launcher) "argument with spaces"])
+                   (.directory (io/file "/"))
+                   (.inheritIO))]
+          (.put (.environment pb) "CLJ_GPUI_BIN" "/wrong/external/host")
+          (.put (.environment pb) "CLJ_GPUI_APP_HOME" "/wrong/external/home")
+          (is (= 37 (.waitFor (.start pb))) bin-path))
+        (finally (delete-tree! dir))))))
+
+(deftest bun-production-install-skips-only-root-lifecycle-scripts
+  (let [manifest {"scripts" {"prepare" "shadow-cljs release app"}
+                  "dependencies" {"dayjs" "1.11.23"}
+                  "devDependencies" {"shadow-cljs" "3.5.3"}}
+        production (#'pkg/production-manifest manifest)]
+    (is (not (contains? production "scripts")))
+    (is (= (dissoc manifest "scripts") production)))
+  (doseq [trust [nil [] ["some-native-addon"]]]
+    (let [manifest (cond-> {"dependencies" {"dayjs" "1.11.23"}}
+                     (some? trust) (assoc "trustedDependencies" trust))
+          production (#'pkg/production-manifest manifest)]
+      (is (= manifest production) "Preserve the built-in list by default and application overrides when supplied")))
+  (doseq [manifest [{"workspaces" ["packages/*"]}
+                    {"dependencies" {"local" "file:../local"}}
+                    {"optionalDependencies" {"local" "workspace:*"}}]]
+    (is (thrown-with-msg? Exception #"independently installable"
+                          (#'pkg/production-manifest manifest)))))
+
+(deftest bun-download-rejects-corrupt-archives-before-extraction
+  (let [target (io/file (System/getProperty "java.io.tmpdir") (str "gpui-bun-" (random-uuid)))
+        extracted? (atom false)]
+    (try
+      (with-redefs-fn {#'pkg/sh! (fn [args _]
+                                   (case (first args)
+                                     "curl" (spit (nth args 6) "corrupt archive")
+                                     "unzip" (reset! extracted? true)))}
+        #(is (thrown-with-msg? Exception #"checksum mismatch"
+                               (#'pkg/bun-distribution {:target target}))))
+      (is (false? @extracted?))
+      (is (empty? (filter #(.isFile ^java.io.File %) (file-seq target))))
+      (finally (delete-tree! target)))))
+
+(deftest debian-control-identifies-the-bun-runtime
+  (let [control (pkg/debian-control {:name "my-app" :backend :cljs})]
+    (is (str/includes? control "bundled Bun runtime"))
+    (is (str/includes? control "libstdc++6"))
+    (is (not (str/includes? control "bundled Java runtime")))))
+
+(deftest bun-payload-is-assembled-for-all-native-formats
+  ;; Assemble all real directory layouts on either CI OS. Stub only the build
+  ;; tool invocations; the Linux CI smoke test also produces/extracts real files.
+  (let [dir (io/file (System/getProperty "java.io.tmpdir") (str "gpui-formats-" (random-uuid)))
+        app (io/file dir "payload")
+        runtime (io/file dir "bun-runtime")
+        host (io/file dir "host")
+        cfg {:name "test-app" :version "0.1.0" :backend :cljs
+             :target (io/file dir "target") :bun-app app :runtime runtime :host host
+             :project-dir dir}
+        sh! @#'pkg/sh!
+        builds (atom 0)]
+    (try
+      (.mkdirs app)
+      (.mkdirs (io/file runtime "bin"))
+      (spit (io/file app "main.cjs") "released code")
+      (spit (io/file runtime "bin/bun") "bundled bun")
+      (spit (io/file runtime "LICENSE.md") "Bun license")
+      (spit host "native host")
+      (spit (io/file dir "LICENSE") "app license")
+      (with-redefs-fn {#'pkg/prepare-package (fn [_] (swap! builds inc) cfg)
+                       #'pkg/ensure-appimagetool (fn [& _] (io/file "fake-appimagetool"))
+                       #'pkg/sh! (fn [args opts]
+                                   (case (first args)
+                                     "fake-appimagetool" (do
+                                                           (is (not (.exists (io/file (last args)))))
+                                                           (spit (last args) "AppImage"))
+                                     "fakeroot" (spit (last args) "deb")
+                                     "strip" nil
+                                     (sh! args opts)))}
+        (fn []
+          (with-redefs [pkg/os-key (constantly :macos)]
+            (let [result (pkg/package-macos {})
+                  resources (io/file (:app result) "Contents/Resources")]
+              (is (= "released code" (slurp (io/file resources "app/main.cjs"))))
+              (is (.isFile (io/file resources "runtime/bin/bun")))
+              (is (= "app license" (slurp (io/file resources "licenses/LICENSE")))))
+            ;; Repackage an existing .app, without nesting the new payload.
+            (is (:app (pkg/package-macos {}))))
+          (with-redefs [pkg/os-key (constantly :linux)]
+            (let [before @builds
+                  result (pkg/package-linux {})
+                  appdir (io/file (:appdir result) "usr")
+                  debdir (io/file (:deb-root result) "usr/lib/test-app")]
+              (is (= (inc before) @builds) "AppImage and deb reuse one build")
+              (doseq [base [appdir debdir]]
+                (is (= "released code" (slurp (io/file base "app/main.cjs")))))
+              (doseq [base [appdir debdir]]
+                (is (= "Bun license" (slurp (io/file base "runtime/LICENSE.md")))))
+              (is (.isFile ^java.io.File (:appimage result)))
+              (is (.isFile ^java.io.File (:deb result)))
+              (is (str/includes? (slurp (io/file (:deb-root result) "DEBIAN/control")) "Bun runtime")))
+            (is (:deb (pkg/package-linux {}))))))
+      (finally (delete-tree! dir)))))

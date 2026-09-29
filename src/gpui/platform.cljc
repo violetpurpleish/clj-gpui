@@ -43,9 +43,10 @@
                    (some? error) {:error (str error)}
                    (or cancelled (nil? path) (= path "")) {:cancelled true}
                    :else {:path (str path)}))
-      (catch Exception e
-        (binding [*out* *err*]
-          (println "[clj-gpui] pick-directory callback failed:" (.getMessage e)))))
+      (catch #?(:clj Exception :cljs :default) e
+        #?(:clj (binding [*out* *err*]
+                  (println "[clj-gpui] pick-directory callback failed:" (.getMessage e)))
+           :cljs (js/console.error "[clj-gpui] pick-directory callback failed:" e))))
     true))
 
 (defn pending-picks
@@ -71,3 +72,5 @@
   [path]
   (runtime/send! {:op "open-path" :path (str path)})
   true)
+
+#?(:cljs (runtime/set-directory-handler! deliver-pick!))

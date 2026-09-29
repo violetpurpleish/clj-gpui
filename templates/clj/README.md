@@ -1,6 +1,7 @@
-# clj-gpui app template
+# JVM Clojure app template
 
 Copy this directory to start a native GPUI app driven by JVM Clojure.
+For ClojureScript and npm, use the sibling `cljs/` template.
 
 ## Run
 
@@ -30,3 +31,8 @@ You can also point at a built host binary with `CLJ_GPUI_BIN`, or at a library c
 Customize the included `gpui.edn`, then run `clj -X:build package` on the OS you are shipping for. That uses `gpui.prod`: no nREPL, no source watcher, no Cargo or development chrome at runtime. Use `-X` so clj-gpui stays on the classpath.
 
 On macOS this writes `target/package/my-app.app`. Linux writes an AppImage and a `.deb`. The bundle includes a reduced Java runtime and the native host, so end users do not need Clojure, Java, or Rust installed.
+
+Replace the placeholder `resources/icon.png` with your app icon. On Linux,
+install `fakeroot` and `dpkg-deb`; `appimagetool` is downloaded and verified if
+it is not on `PATH`. Build each package on its target OS and CPU architecture.
+Signing/notarization is a separate distribution step.

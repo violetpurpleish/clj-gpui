@@ -1,0 +1,22 @@
+{
+  "name": "clj-gpui-workspace",
+  "private": true,
+  "scripts": {
+    "test": "bun --no-install node_modules/shadow-cljs/cli/runner.js compile test && bun --no-install target/cljs-tests.js",
+    "test:protocol": "bun --no-install node_modules/shadow-cljs/cli/runner.js compile protocol && bun --no-install target/cljs-protocol.js",
+    "cljs:compile": "bun --no-install node_modules/shadow-cljs/cli/runner.js compile counter",
+    "cljs:watch": "bun --no-install node_modules/shadow-cljs/cli/runner.js watch counter",
+    "cljs:start": "bun --no-install target/cljs-counter.js",
+    "cljs:release": "bun --no-install node_modules/shadow-cljs/cli/runner.js release counter"
+  },
+  "devDependencies": {
+    "shadow-cljs": "3.5.3"
+  },
+  "dependencies": {
+    "dayjs": "1.11.23"
+  },
+  "packageManager": "bun@1.4.2",
+  "engines": {
+    "bun": ">=1.4.2"
+  }
+}

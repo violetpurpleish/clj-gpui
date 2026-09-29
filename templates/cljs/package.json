@@ -1,0 +1,22 @@
+{
+  "name": "my-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "compile": "bun --no-install node_modules/shadow-cljs/cli/runner.js compile app",
+    "watch": "bun --no-install node_modules/shadow-cljs/cli/runner.js watch app",
+    "start": "bun --no-install target/app.js",
+    "release": "bun --no-install node_modules/shadow-cljs/cli/runner.js release app",
+    "package": "clojure -X:build"
+  },
+  "dependencies": {
+    "dayjs": "1.11.23"
+  },
+  "devDependencies": {
+    "shadow-cljs": "3.5.3"
+  },
+  "engines": {
+    "bun": ">=1.4.2"
+  },
+  "packageManager": "bun@1.4.2"
+}
