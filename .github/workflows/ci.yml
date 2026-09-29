@@ -71,6 +71,17 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install ClojureScript tooling
+        run: bun install --frozen-lockfile
+
       - uses: DeLaGuardo/setup-clojure@13.6.1
         with:
           cli: latest
@@ -81,7 +92,7 @@ jobs:
             ~/.m2/repository
             ~/.gitlibs
             ~/.deps.clj
-          key: clj-${{ runner.os }}-${{ hashFiles('deps.edn', 'examples/**/deps.edn', 'template/deps.edn') }}
+          key: clj-${{ runner.os }}-${{ hashFiles('deps.edn', 'examples/**/deps.edn', 'template/deps.edn', 'bun.lock', 'shadow-cljs.edn') }}
           restore-keys: |
             clj-${{ runner.os }}-
 

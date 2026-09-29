@@ -3,7 +3,8 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [gpui.runtime :as runtime]
-            [gpui.ui :as ui]))
+            [gpui.ui :as ui]
+            [gpui.wire :as wire]))
 
 (defn- schema-fields [struct rust-type]
   (let [source (slurp "host/src/protocol.rs")
@@ -23,11 +24,11 @@
 
 (deftest boolean-categories-match-the-native-schema
   (is (= (conj (schema-fields "Node" "bool") :caret)
-         @#'runtime/node-boolean-flags))
-  (is (= (schema-fields "Node" "Option<bool>") @#'runtime/node-boolean-overrides))
-  (is (= (schema-fields "Item" "bool") @#'runtime/item-boolean-flags))
-  (is (= (schema-fields "Item" "Option<bool>") @#'runtime/item-boolean-overrides))
-  (is (= (schema-fields "StyledKeys" "Option<bool>") @#'runtime/styled-boolean-overrides))
+         @#'wire/node-boolean-flags))
+  (is (= (schema-fields "Node" "Option<bool>") @#'wire/node-boolean-overrides))
+  (is (= (schema-fields "Item" "bool") @#'wire/item-boolean-flags))
+  (is (= (schema-fields "Item" "Option<bool>") @#'wire/item-boolean-overrides))
+  (is (= (schema-fields "StyledKeys" "Option<bool>") @#'wire/styled-boolean-overrides))
   (is (= #{:shadow} (schema-fields "ButtonCustomVariantSpec" "Option<bool>"))))
 
 (deftest every-schema-boolean-preserves-omission-and-boolean-values
@@ -57,7 +58,7 @@
       (let [text (error-text (ui/window (ui/button "Action" {k value})))]
         (is (str/includes? text (str "children[0]." (name k))))
         (is (str/includes? text (str "expected true, false, or nil, got " type))))))
-  (is (empty? @@#'runtime/callbacks)
+  (is (empty? @@#'wire/callbacks)
       "an invalid function-valued boolean is not registered as a callback"))
 
 (deftest typed-nested-locations-use-their-own-schema

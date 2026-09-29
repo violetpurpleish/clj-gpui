@@ -1,62 +1,66 @@
 (ns gpui.ui-test
-  (:require [clojure.data.json :as json]
-            [clojure.java.io :as io]
+  (:require #?(:clj [clojure.data.json :as json])
+            #?(:clj [clojure.java.io :as io])
+            #?(:cljs ["node:fs" :as fs])
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [gpui.runtime :as runtime]
             [gpui.ui :as ui]))
 
-(deftest kit-06-names-are-not-aliased
-  (is (nil? (ns-resolve 'gpui.ui 'text-field)))
-  (is (nil? (ns-resolve 'gpui.ui 'divider)))
-  (is (some? (ns-resolve 'gpui.ui 'table)))
-  (is (some? (ns-resolve 'gpui.ui 'input)))
-  (is (some? (ns-resolve 'gpui.ui 'separator)))
-  (is (some? (ns-resolve 'gpui.ui 'data-table)))
-  (is (some? (ns-resolve 'gpui.ui 'textarea)))
-  (is (some? (ns-resolve 'gpui.ui 'alert-dialog)))
-  (is (some? (ns-resolve 'gpui.ui 'combobox)))
-  (is (some? (ns-resolve 'gpui.ui 'rating)))
-  (is (some? (ns-resolve 'gpui.ui 'toggle-group)))
-  (is (some? (ns-resolve 'gpui.ui 'pagination)))
-  (is (some? (ns-resolve 'gpui.ui 'progress-circle)))
-  (is (some? (ns-resolve 'gpui.ui 'shimmer)))
-  (is (some? (ns-resolve 'gpui.ui 'hover-card)))
-  (is (some? (ns-resolve 'gpui.ui 'avatar-group)))
-  (is (some? (ns-resolve 'gpui.ui 'dropdown-button)))
-  (is (some? (ns-resolve 'gpui.ui 'table-header)))
-  (is (some? (ns-resolve 'gpui.ui 'table-body)))
-  (is (some? (ns-resolve 'gpui.ui 'table-footer)))
-  (is (some? (ns-resolve 'gpui.ui 'table-row)))
-  (is (some? (ns-resolve 'gpui.ui 'table-head)))
-  (is (some? (ns-resolve 'gpui.ui 'table-cell)))
-  (is (some? (ns-resolve 'gpui.ui 'message)))
-  (is (some? (ns-resolve 'gpui.ui 'message-group)))
-  (is (some? (ns-resolve 'gpui.ui 'bubble)))
-  (is (some? (ns-resolve 'gpui.ui 'bubble-reactions)))
-  (is (some? (ns-resolve 'gpui.ui 'attachment)))
-  (is (some? (ns-resolve 'gpui.ui 'attachment-media-overlay)))
-  (is (some? (ns-resolve 'gpui.ui 'marker)))
-  (is (some? (ns-resolve 'gpui.ui 'message-scroller)))
-  (is (some? (ns-resolve 'gpui.ui 'nav-stack)))
-  (is (some? (ns-resolve 'gpui.ui 'nav-page)))
-  (is (some? (ns-resolve 'gpui.ui 'native-menu)))
-  (is (some? (ns-resolve 'gpui.ui 'command)))
-  (is (some? (ns-resolve 'gpui.ui 'status-bar)))
-  (is (some? (ns-resolve 'gpui.ui 'horizontal-bar-chart)))
-  (is (some? (ns-resolve 'gpui.ui 'radar-chart)))
-  (is (some? (ns-resolve 'gpui.ui 'candlestick-chart)))
-  (is (some? (ns-resolve 'gpui.ui 'sankey-chart))))
+#?(:clj
+   (deftest kit-06-names-are-not-aliased
+     (is (nil? (ns-resolve 'gpui.ui 'text-field)))
+     (is (nil? (ns-resolve 'gpui.ui 'divider)))
+     (is (some? (ns-resolve 'gpui.ui 'table)))
+     (is (some? (ns-resolve 'gpui.ui 'input)))
+     (is (some? (ns-resolve 'gpui.ui 'separator)))
+     (is (some? (ns-resolve 'gpui.ui 'data-table)))
+     (is (some? (ns-resolve 'gpui.ui 'textarea)))
+     (is (some? (ns-resolve 'gpui.ui 'alert-dialog)))
+     (is (some? (ns-resolve 'gpui.ui 'combobox)))
+     (is (some? (ns-resolve 'gpui.ui 'rating)))
+     (is (some? (ns-resolve 'gpui.ui 'toggle-group)))
+     (is (some? (ns-resolve 'gpui.ui 'pagination)))
+     (is (some? (ns-resolve 'gpui.ui 'progress-circle)))
+     (is (some? (ns-resolve 'gpui.ui 'shimmer)))
+     (is (some? (ns-resolve 'gpui.ui 'hover-card)))
+     (is (some? (ns-resolve 'gpui.ui 'avatar-group)))
+     (is (some? (ns-resolve 'gpui.ui 'dropdown-button)))
+     (is (some? (ns-resolve 'gpui.ui 'table-header)))
+     (is (some? (ns-resolve 'gpui.ui 'table-body)))
+     (is (some? (ns-resolve 'gpui.ui 'table-footer)))
+     (is (some? (ns-resolve 'gpui.ui 'table-row)))
+     (is (some? (ns-resolve 'gpui.ui 'table-head)))
+     (is (some? (ns-resolve 'gpui.ui 'table-cell)))
+     (is (some? (ns-resolve 'gpui.ui 'message)))
+     (is (some? (ns-resolve 'gpui.ui 'message-group)))
+     (is (some? (ns-resolve 'gpui.ui 'bubble)))
+     (is (some? (ns-resolve 'gpui.ui 'bubble-reactions)))
+     (is (some? (ns-resolve 'gpui.ui 'attachment)))
+     (is (some? (ns-resolve 'gpui.ui 'attachment-media-overlay)))
+     (is (some? (ns-resolve 'gpui.ui 'marker)))
+     (is (some? (ns-resolve 'gpui.ui 'message-scroller)))
+     (is (some? (ns-resolve 'gpui.ui 'nav-stack)))
+     (is (some? (ns-resolve 'gpui.ui 'nav-page)))
+     (is (some? (ns-resolve 'gpui.ui 'native-menu)))
+     (is (some? (ns-resolve 'gpui.ui 'command)))
+     (is (some? (ns-resolve 'gpui.ui 'status-bar)))
+     (is (some? (ns-resolve 'gpui.ui 'horizontal-bar-chart)))
+     (is (some? (ns-resolve 'gpui.ui 'radar-chart)))
+     (is (some? (ns-resolve 'gpui.ui 'candlestick-chart)))
+     (is (some? (ns-resolve 'gpui.ui 'sankey-chart)))))
 
 (deftest window-title
   (is (= "clj-gpui" ui/window-title)))
 
+(defn- json-roundtrip [value]
+  #?(:clj (json/read-str (json/write-str value) :key-fn keyword)
+     :cljs (js->clj (js/JSON.parse (js/JSON.stringify (clj->js value))) :keywordize-keys true)))
+
 (deftest window-missing-glyph-callback-round-trips-unicode-and-refreshes
   (let [seen (atom [])
-        reports (json/read-str
-                 (json/write-str [{:grapheme "👩‍💻" :font-class "proportional"}
-                                  {:grapheme "é" :font-class "monospace"}])
-                 :key-fn keyword)
+        reports (json-roundtrip [{:grapheme "👩‍💻" :font-class "proportional"}
+                                 {:grapheme "é" :font-class "monospace"}])
         exported (runtime/export-tree
                   (ui/window {:on-missing-glyphs #(swap! seen conj [:first %])}
                              (ui/label "Diagnostics")))
@@ -112,13 +116,22 @@
                       :traffic-light-position))))
 
 (deftest named-themes-match-vendored-json
-  (let [dir (io/file "host/themes")
-        from-json (->> (or (.listFiles dir) (into-array java.io.File []))
-                       (filter #(str/ends-with? (.getName ^java.io.File %) ".json"))
-                       (mapcat (fn [f]
-                                 (get (json/read-str (slurp f)) "themes")))
-                       (map #(get % "name"))
-                       set)]
+  (let [from-json
+        #?(:clj
+           (let [dir (io/file "host/themes")]
+             (->> (or (.listFiles dir) (into-array java.io.File []))
+                  (filter #(str/ends-with? (.getName ^java.io.File %) ".json"))
+                  (mapcat (fn [f] (get (json/read-str (slurp f)) "themes")))
+                  (map #(get % "name"))
+                  set))
+           :cljs
+           (->> (array-seq (fs/readdirSync "host/themes"))
+                (filter #(str/ends-with? % ".json"))
+                (mapcat (fn [f]
+                          (:themes (js->clj (js/JSON.parse (fs/readFileSync (str "host/themes/" f) "utf8"))
+                                            :keywordize-keys true))))
+                (map :name)
+                set))]
     (is (seq from-json) "expected vendored gpui-component theme JSON under host/themes")
     (is (= from-json (set (remove #{"Default Light" "Default Dark"} ui/named-themes))))
     (is (some #{"Tokyo Night"} ui/named-themes))
@@ -688,7 +701,7 @@
         switch-id (get-in children [1 :on-change])
         field-id (get-in children [2 :on-change])
         through (fn [m]
-                  (runtime/handle (json/read-str (json/write-str m) :key-fn keyword)))]
+                  (runtime/handle (json-roundtrip m)))]
     (through {:op "callback" :id 1 :callback-id zero-id})
     (is (= :zero @got))
     (through {:op "callback" :id 2 :callback-id switch-id :value false})

@@ -1,0 +1,12 @@
+{:source-paths ["src" "test" "test-cljs" "examples/cljs-counter/src"]
+ :builds
+ {:test {:target :node-test
+         :output-to "target/cljs-tests.js"
+         :ns-regexp "^gpui\\.(ui-test|cljs-.*-test)$"}
+  :protocol {:target :node-script
+             :output-to "target/cljs-protocol.js"
+             :main gpui.cljs-protocol/main}
+  :counter {:target :node-script
+            :output-to "target/cljs-counter.js"
+            :main counter.app/main
+            :devtools {:after-load counter.app/reload!}}}}

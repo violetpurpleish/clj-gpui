@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/violetpurpleish/clj-gpui/actions/workflows/ci.yml/badge.svg)](https://github.com/violetpurpleish/clj-gpui/actions/workflows/ci.yml)
 
-A library for writing **native GPUI applications in real Clojure**.
+A library for writing **native GPUI applications in Clojure or ClojureScript**.
 
-This is not a Clojure-like language, a Lisp-inspired DSL, or a toy interpreter. Application code is ordinary JVM Clojure: `def`, `defn`, `defonce`, atoms, `#()`, `map`, macros, namespaces. Rust owns the GPUI window and translates Clojure data into native [GPUI Kit](https://gpui-kit.com) widgets.
+This is not a Clojure-like language, a Lisp-inspired DSL, or a toy interpreter. Application code is ordinary JVM Clojure or ClojureScript on Node.js: `def`, `defn`, `defonce`, atoms, `#()`, `map`, macros, namespaces. Rust owns the GPUI window and translates Clojure data into native [GPUI Kit](https://gpui-kit.com) widgets.
 
-There is no Clojars release yet. Depend on this repo with `:local/root` or a git SHA. GitHub Actions runs `./scripts/ci.sh` on Ubuntu and macOS (Rust unit plus production-renderer interaction tests, strict Clippy, Clojure tests, cljfmt, and the windowless socket protocol test). macOS additionally runs the explicit offscreen Metal pixel target.
+There is no Clojars release yet. Depend on this repo with `:local/root` or a git SHA. GitHub Actions runs `./scripts/ci.sh` on Ubuntu and macOS (Rust unit plus production-renderer interaction tests, strict Clippy, Clojure and ClojureScript tests, cljfmt, and windowless socket protocol tests for both runtimes). macOS additionally runs the explicit offscreen Metal pixel target.
 
 The host uses GPUI Kit 0.7.0 and GPUI 0.3.7. See the [migration notes](docs/gpui-kit-0.7.0-migration.md) for compatibility and validation details.
 
@@ -15,6 +15,22 @@ New in 0.7: `ui/toolbar`, `ui/questionnaire`, `ui/time-field`, date/time picking
 `ui/window` supports optional [`:on-missing-glyphs` font diagnostics](docs/font-diagnostics.md). Delivery depends on the native text backend; the linked guide records the platform support audit.
 
 ![screenshot](https://i.imgur.com/gKXfCnx.png)
+
+## ClojureScript with npm
+
+ClojureScript apps use shadow-cljs and Node.js to drive the same native widgets:
+
+```sh
+bun install --frozen-lockfile
+bun run cljs:compile
+bun run cljs:start
+```
+
+For hot reload, run `bun run cljs:watch` and start the app in a second terminal.
+The example uses `dayjs` from npm and Node's `os` module. Node-compatible npm
+packages are supported; browser packages requiring a DOM need a different UI.
+See the [ClojureScript guide](docs/clojurescript.md) for setup, releases and the
+investigation of GPUI Shell. The JVM workflow below remains supported.
 
 ## Quick start
 
@@ -211,7 +227,7 @@ If `app` throws, or if reload itself fails (syntax error, unmatched delimiter, u
 
 ## Formatting
 
-Clojure is formatted with [cljfmt](https://github.com/weavejester/cljfmt) using [community indentation](https://guide.clojure.style/#one-space-indent) (one space when arguments start on the next line). Config is `.cljfmt.edn`. It covers `src/`, `test/`, `examples/`, and `template/`.
+Clojure is formatted with [cljfmt](https://github.com/weavejester/cljfmt) using [community indentation](https://guide.clojure.style/#one-space-indent) (one space when arguments start on the next line). Config is `.cljfmt.edn`. It covers `src/`, `test/`, `test-cljs/`, `examples/`, and `template/`.
 
 ```bash
 clojure -M:cljfmt check
@@ -225,15 +241,18 @@ The native host is ordinary Rust: `cargo fmt` in `host/` if you touch it.
 ```text
 deps.edn                      ; git-dep library entry
 .cljfmt.edn                   ; cljfmt paths and community indentation
-src/gpui/ui.clj               ; public widgets
-src/gpui/theme.clj            ; register custom GPUI Kit ThemeSets
-src/gpui/ratom.clj            ; (r/atom ...)
+src/gpui/ui.cljc             ; public widgets
+src/gpui/theme.cljc          ; register custom GPUI Kit ThemeSets
+src/gpui/ratom.cljc          ; (r/atom ...)
 src/gpui/core.clj             ; compatibility re-export of gpui.ui
-src/gpui/runtime.clj          ; protocol, callbacks, nREPL, watcher
+src/gpui/wire.cljc            ; shared serialization and callbacks
+src/gpui/runtime.clj          ; JVM protocol, nREPL, watcher
+src/gpui/runtime.cljs         ; Node protocol and asynchronous providers
+src/gpui/node.cljs            ; Node launcher and host lifecycle
 src/gpui/host.clj             ; locate/build/spawn the native host
 src/gpui/dev.clj              ; development launcher (nREPL, watcher, Cargo)
 src/gpui/prod.clj             ; production launcher (no nREPL/watcher/Cargo)
-src/gpui/platform.clj         ; folder picker, reveal/open path
+src/gpui/platform.cljc       ; folder picker, reveal/open path
 src/gpui/package.clj          ; `clj -X:build package`
 host/                         ; native GPUI Kit host
 host/themes/                  ; bundled GPUI Kit palettes (Tokyo Night, Ayu, …)

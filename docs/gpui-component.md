@@ -114,7 +114,7 @@ Coverage-table **status** is not Kit public-API parity by itself:
 | `gpui-fps` | `:chrome :dev` | ✅ | D | Overlay HUD on the relative root; hidden when `:chrome :app` |
 | `History` | — | ❌ | E | Undo stack, not UI |
 | `webview` | — | ❌ | D | **Intentionally unsupported.** `gpui-wry` is a standalone WebView stack. clj-gpui does not carry it; wrap it later only if an app needs an embedded browser |
-| `gpui-shell` | — | ❌ | D | **Intentionally unsupported.** Kit's JS scripting runtime. Clojure is already the scriptable layer; a second JS host does not fit |
+| `gpui-shell` | — | ❌ | D | **Intentionally unsupported.** Kit's QuickJS scripting runtime. [ClojureScript uses Node.js](clojurescript.md) with the existing host instead |
 | `animation` helpers | — | ❌ | E | Not a control |
 | `IndexPath` / `Rope` / geometry | — | ❌ | E | Host types |
 
