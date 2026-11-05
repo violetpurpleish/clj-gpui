@@ -438,7 +438,7 @@ for constructor shorthand details.
 
 Functions never go on the wire. `gpui.runtime` replaces `fn?` values under `:on-missing-glyphs` / `:on-click` / `:on-change` / `:on-release` / `:on-submit` / `:on-double-click` / `:on-blur` / `:on-escape` / `:on-close` / `:on-copied` / `:on-ok` / `:on-cancel` / `:on-confirm` / `:on-select` / `:on-open-change` / `:on-forward-change` / `:on-query` / `:on-export` / `:on-sort` / `:on-load-more` with ids such as `"cb-2"`. Nested `:items` / `:options` / `:links` / `:series` / `:content` / `:trigger` / `:footer` / `:left` / `:right` are walked too. The registry is rebuilt on every export. `nav-stack` `:item` is a static recipe map (or `"slide"`), not a callback: phase and progress are per-frame and are applied by the host. A Clojure `:item` function is dropped as JSON `false` so it still suppresses `transition-style` rather than resurrecting `slide`.
 
-The native host paints these nodes with [GPUI Kit](https://gpui-kit.com) 0.7.0 (`gpui-kit` crate, `tree-sitter-languages`). Icon-bearing widgets load named SVGs from the complete `gpui-kit-assets` catalog or accept inline UTF-8 `icon-svg` content. See [gpui-component.md](gpui-component.md) for the coverage inventory.
+The native host paints these nodes with [GPUI Kit](https://gpui-kit.com) 0.9.0 (`gpui-kit` crate, `tree-sitter-languages` and `speech`). Icon-bearing widgets load named SVGs from the complete `gpui-kit-assets` catalog or accept inline UTF-8 `icon-svg` content. See [gpui-component.md](gpui-component.md) for the coverage inventory.
 
 A `scroll` node is a vertical overflow viewport. Without `height`, the host gives it `flex: 1` and `min-height: 0` so it takes leftover space in a column instead of growing with its children. `height` is a fixed pixel viewport. `width` constrains the viewport; omitted, it fills the parent. `size` is a square viewport, matching other nodes (it wins over `width` / `height`). Visual styles (`padding`, `bg`, `border`, …) apply to the inner scroll body, not twice. `flex: 1` on other nodes also sets `min-height: 0`.
 
@@ -503,3 +503,7 @@ existing trees and fields are unchanged.
 ## GPUI Kit 0.7.0 additions
 
 The wire protocol remains v11. New node kinds and optional properties are described in [the migration guide](gpui-kit-0.7.0-migration.md). Older hosts cannot render the new component kinds. Date-only callbacks retain their old shape; opt-in time values are ISO strings. Questionnaire events use string identities and structured answer snapshots. Token and Markdown ranges use UTF-8 bytes.
+
+## GPUI Kit 0.9.0 additions
+
+Protocol v11 gains `color-select`, `diff`, `speech-button`, `speech-waveform`, `speech-indicator`, and `resize-handle` nodes. New callbacks include `on-edits`, `on-token-hover`, `on-add-annotation`, and `on-speech`. Edit batches and their value change share a callback sequence. Editor decoration ranges and edit offsets use UTF-8 bytes; Diff line numbers are one-based. The [0.9 migration guide](gpui-kit-0.9.0-migration.md) specifies the options, event payloads, theme compatibility and platform requirements. Rebuild the host before using these additions.

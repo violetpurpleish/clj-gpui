@@ -561,6 +561,12 @@ pub enum QueuedAction {
         event: String,
         value: Value,
     },
+    InputEdits {
+        key: String,
+        callback_key: String,
+        value: Value,
+        change: Option<String>,
+    },
     Input {
         dialog: bool,
         key: String,
@@ -791,6 +797,26 @@ impl CallbackQueue {
         }
         while let Some(action) = self.pending.pop_front() {
             let mut calls = action.resolve(tree);
+            let mut input_echo = match &action {
+                QueuedAction::Input { key, revision, .. } => Some(InputEcho {
+                    key: key.clone(),
+                    revision: *revision,
+                }),
+                _ => None,
+            };
+            // The native edit snapshot precedes Change. Send both against the
+            // same callback registry and preserve Change's controlled-value latch.
+            if let QueuedAction::InputEdits { key, .. } = &action
+                && matches!(self.pending.front(), Some(QueuedAction::Input {
+                    key: input_key, event: TextInputEvent::Change, ..
+                }) if input_key == key)
+            {
+                let change = self.pending.pop_front().unwrap();
+                calls.extend(change.resolve(tree));
+                if let QueuedAction::Input { key, revision, .. } = change {
+                    input_echo = Some(InputEcho { key, revision });
+                }
+            }
             // Kit confirm is Action (CljSelect) then deferred on_confirm.
             // Drain the matching confirm into this batch so :on-change and
             // Kit :on-confirm share one callback generation.
@@ -808,13 +834,7 @@ impl CallbackQueue {
                     calls,
                     command_echo: CommandEcho::from_action(&action),
                     slider_echo: SliderEcho::from_action(&action),
-                    input_echo: match &action {
-                        QueuedAction::Input { key, revision, .. } => Some(InputEcho {
-                            key: key.clone(),
-                            revision: *revision,
-                        }),
-                        _ => None,
-                    },
+                    input_echo,
                 });
             }
         }
@@ -867,6 +887,31 @@ pub fn missing_glyph_callback(tree: &Node) -> Option<&str> {
 
 impl QueuedAction {
     fn resolve(&self, tree: &Node) -> Vec<protocol::CallbackCall> {
+        if let Self::InputEdits {
+            callback_key,
+            value,
+            change,
+            ..
+        } = self
+        {
+            let mut calls = Self::WidgetValue {
+                key: callback_key.clone(),
+                event: "edits".into(),
+                value: value.clone(),
+            }
+            .resolve(tree);
+            if let Some(change) = change {
+                calls.extend(
+                    Self::WidgetValue {
+                        key: callback_key.clone(),
+                        event: "change".into(),
+                        value: json!(change),
+                    }
+                    .resolve(tree),
+                );
+            }
+            return calls;
+        }
         if let Self::MissingGlyphs(glyphs) = self {
             return missing_glyph_callback(tree)
                 .map(|id| {
@@ -973,7 +1018,7 @@ impl QueuedAction {
                 .collect();
         }
         let key = match self {
-            Self::MissingGlyphs(_) => return Vec::new(), // resolved at the root above
+            Self::MissingGlyphs(_) | Self::InputEdits { .. } => return Vec::new(), // resolved above
             Self::Input { key, .. } | Self::WidgetValue { key, .. } => key,
             Self::ButtonClick { key }
             | Self::ScrollerNodeClick { key, .. }
@@ -990,7 +1035,7 @@ impl QueuedAction {
         let mut found = None;
         walk_nodes(tree, "root", &mut |node, path| {
             let kind_matches = match self {
-                Self::MissingGlyphs(_) => false,
+                Self::MissingGlyphs(_) | Self::InputEdits { .. } => false,
                 Self::WidgetValue { .. } => true,
                 Self::Input { .. } => false, // resolved separately above
                 Self::ButtonClick { .. } => node.kind == "button",
@@ -1030,6 +1075,11 @@ impl QueuedAction {
         match self {
             Self::WidgetValue { event, value, .. } => {
                 let callback = match event.as_str() {
+                    "speech" => node.on_speech,
+                    "edits" => node.on_edits,
+                    "token-hover" => node.on_token_hover,
+                    "add-annotation" => node.on_add_annotation,
+                    "click" => node.on_click,
                     "change" => node.on_change,
                     "current-change" => node.on_current_change,
                     "complete" => node.on_complete,
@@ -2250,6 +2300,12 @@ pub fn configure_dialog(
     if let Some(footer) = node.footer.clone() {
         dialog = dialog.footer(protocol::Content::Node(footer));
     }
+    if node.centered == Some(true) {
+        dialog = dialog.centered();
+    }
+    if let Some(entrance) = &node.entrance {
+        dialog = dialog.entrance(dialog_entrance(entrance));
+    }
     dialog.extend(children);
     dialog
 }
@@ -2286,6 +2342,15 @@ pub fn configure_alert_dialog(
     }
     if let Some(width) = node.width {
         alert = alert.width(px(width));
+    }
+    if let Some(top) = node.margin_top {
+        alert = alert.margin_top(px(top));
+    }
+    if node.centered == Some(true) {
+        alert = alert.centered();
+    }
+    if let Some(entrance) = &node.entrance {
+        alert = alert.entrance(dialog_entrance(entrance));
     }
     alert.extend(children);
     alert
@@ -2517,6 +2582,16 @@ pub fn live_notification_click(
 
 pub fn notification_autohide(node: &Node) -> bool {
     node.autohide.unwrap_or(true)
+}
+
+fn dialog_entrance(value: &str) -> gpui_component::dialog::DialogEntrance {
+    use gpui_component::dialog::DialogEntrance;
+    match value {
+        "none" => DialogEntrance::None,
+        "fade" => DialogEntrance::Fade,
+        "fade-slide" => DialogEntrance::FadeSlide,
+        _ => DialogEntrance::SlideDown,
+    }
 }
 
 #[cfg(test)]

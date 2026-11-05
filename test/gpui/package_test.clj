@@ -365,3 +365,9 @@
               (is (str/includes? (slurp (io/file (:deb-root result) "DEBIAN/control")) "Bun runtime")))
             (is (:deb (pkg/package-linux {}))))))
       (finally (delete-tree! dir)))))
+
+(deftest speech-usage-descriptions-are-packaged-and-escaped
+  (let [plist (pkg/info-plist {:microphone-usage-description "Dictate <notes>"
+                               :speech-recognition-usage-description "Speech & text"})]
+    (is (str/includes? plist "NSMicrophoneUsageDescription</key><string>Dictate &lt;notes&gt;"))
+    (is (str/includes? plist "NSSpeechRecognitionUsageDescription</key><string>Speech &amp; text"))))

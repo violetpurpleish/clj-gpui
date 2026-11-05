@@ -4,6 +4,8 @@ mod parity;
 mod providers;
 #[path = "renderer/release_070.rs"]
 mod release_070;
+#[path = "renderer/release_090.rs"]
+mod release_090;
 #[path = "renderer/text_070.rs"]
 mod text_070;
 #[path = "renderer/text_options.rs"]
@@ -647,6 +649,7 @@ pub struct RootView {
     render_scroller: Option<overlay::ScrollerPaintContext>,
     parity: parity::State,
     release: release_070::State,
+    release_090: release_090::State,
     text_070: text_070::State,
     dialogs: Vec<overlay::DialogSpec>,
     dialog_live: Rc<RefCell<Vec<overlay::DialogSpec>>>,
@@ -1084,6 +1087,16 @@ impl RootView {
                                 view.custom_title_bar = Some(bar.clone());
                             }
                             catalog::install_clojure_sets(themes);
+                            if view
+                                .tree
+                                .as_ref()
+                                .is_none_or(|old| old.icon_paths != tree.icon_paths)
+                            {
+                                let paths = tree.icon_paths.clone();
+                                gpui_component::set_icon_resolver(cx, move |path, _| {
+                                    paths.get(path).cloned().map(SharedString::from)
+                                });
+                            }
                             overlay::acknowledge_dialog_tree(&mut view.dialog_keys, &tree);
                             view.tree_overlays = TreeOverlays {
                                 dialogs: overlay::collect_open_dialogs(&tree),
@@ -1199,6 +1212,7 @@ impl RootView {
             render_scroller: None,
             parity: parity::State::default(),
             release: release_070::State::default(),
+            release_090: release_090::State::default(),
             text_070: text_070::State::default(),
             dialogs: Vec::new(),
             dialog_live: Rc::new(RefCell::new(Vec::new())),
@@ -1578,7 +1592,13 @@ impl RootView {
             slot.on_submit = node.on_submit.clone();
             slot.on_blur = node.on_blur.clone();
             slot.on_escape = node.on_escape.clone();
-            changed && slot.change.on_ids_refreshed()
+            if node.on_edits.is_some() {
+                // Edit snapshots own the paired Change callback while opted in.
+                slot.change.clear();
+                false
+            } else {
+                changed && slot.change.on_ids_refreshed()
+            }
         }
         if let Some(slot) = self.editors.get_mut(key)
             && text_callbacks(slot, node)
@@ -1627,6 +1647,10 @@ impl RootView {
         }
         self.parity.refresh_callbacks(key, node);
         self.release.refresh_callbacks(key, node);
+        self.release_090.refresh_edits(key, node);
+        if let Some(id) = self.release_090.speech_owner_mut(key) {
+            *id = node.speech_id.clone().unwrap_or_else(|| key.to_string());
+        }
     }
 
     fn schedule_input_change_flush(
@@ -1707,6 +1731,7 @@ impl RootView {
     ) -> Entity<InputState> {
         let state = self.input_state(key, node, window, cx);
         self.sync_input_tokens(key, node, &state, window, cx);
+        self.sync_input_edits(key, node, &state, window, cx);
         self.sync_text_selection(key, node, &state, cx);
         state
     }
@@ -2387,7 +2412,7 @@ impl RootView {
             "notification" => div().into_any_element(),
             "number-input" => self.render_number_input(node, &key, window, cx),
             "otp-input" => self.render_otp_input(node, &key, window, cx),
-            "color-picker" => self.render_color_picker(node, &key, window, cx),
+            "color-picker" | "color-select" => self.render_color_picker(node, &key, window, cx),
             "attachment-group" => self.render_attachment_group_070(node, path, &key, window, cx),
             "date-picker" => self.render_date_picker(node, &key, window, cx),
             "editor" => self.render_editor(node, &key, window, cx),
@@ -2451,6 +2476,9 @@ impl RootView {
                 node,
                 path,
             ),
+            "diff" | "speech-button" | "speech-waveform" | "speech-indicator" | "resize-handle" => {
+                self.render_release_090(node, path, &key, window, cx)
+            }
             kind if release_070::is_kind(kind) => {
                 self.render_release_070(node, path, &key, window, cx)
             }
@@ -5427,6 +5455,20 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let state = self.color_slot(key, node, window, cx);
+        if node.kind == "color-select" {
+            let mut field = gpui_component::color_picker::ColorSelect::new(&state)
+                .with_size(mapping::parse_scale(node.control_size.as_deref()));
+            if let Some(placeholder) = &node.placeholder {
+                field = field.placeholder(placeholder.clone());
+            }
+            if let Some(label) = &node.accessibility_label {
+                field = field.accessibility_label(label.clone());
+            }
+            if let Some(colors) = mapping::featured_colors(node) {
+                field = field.featured_colors(colors);
+            }
+            return apply_style(field, node, cx).into_any_element();
+        }
         let mut picker = ColorPicker::new(&state);
         if let Some(label) = node.text.clone().or(node.title.clone()) {
             picker = picker.label(label);
@@ -5695,6 +5737,8 @@ impl RootView {
         self.sync_text_search(key, node, &state, window, cx);
         self.sync_editor_providers(key, node, &state, cx);
         self.sync_range_decorations(key, node, &state, cx);
+        self.sync_editor_marks(key, node, &state, cx);
+        self.sync_input_edits(key, node, &state, window, cx);
         // Code editor Input is multi-line but `h_auto` without an explicit
         // height collapses to a single row. Fill the viewport wrapper.
         viewport_sized(
@@ -5799,6 +5843,9 @@ impl RootView {
             window,
             move |this, input, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => {
+                    if this.release_090.edits_enabled(&key_owned) {
+                        return; // InputEditsEvent carries this immutable value in the same batch.
+                    }
                     let Some(slot) = this.editors.get_mut(&key_owned) else {
                         return;
                     };
@@ -5835,6 +5882,7 @@ impl RootView {
         let state = self.textarea_state(key, node, window, cx);
         self.sync_textarea_options(key, node, &state, window, cx);
         self.sync_textarea_tokens(key, node, &state, window, cx);
+        self.sync_input_edits(key, node, &state, window, cx);
         self.sync_text_search(key, node, &state, window, cx);
         state
     }
@@ -5926,6 +5974,9 @@ impl RootView {
             window,
             move |this, input, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => {
+                    if this.release_090.edits_enabled(&key_owned) {
+                        return; // InputEditsEvent carries this immutable value in the same batch.
+                    }
                     let Some(slot) = this.textareas.get_mut(&key_owned) else {
                         return;
                     };
@@ -6293,18 +6344,16 @@ impl RootView {
                     let wheel_view = view.clone();
                     let wheel_key = key.clone();
                     let hitbox_id = hitbox.id;
-                    window.on_mouse_event(
-                        move |event: &gpui::ScrollWheelEvent, phase, window, cx| {
-                            if phase.capture()
-                                && hitbox_id.should_handle_scroll(window)
-                                && event.delta.pixel_delta(px(1.)).y != px(0.)
-                            {
-                                let _ = wheel_view.update(cx, |this, cx| {
-                                    this.pause_message_scroller_follow(&wheel_key, delay, cx);
-                                });
-                            }
-                        },
-                    );
+                    window.on_mouse_event(move |event: &gpui::ScrollEvent, phase, window, cx| {
+                        if phase.capture()
+                            && hitbox_id.should_handle_scroll(window)
+                            && event.delta.pixel_delta(px(1.)).y != px(0.)
+                        {
+                            let _ = wheel_view.update(cx, |this, cx| {
+                                this.pause_message_scroller_follow(&wheel_key, delay, cx);
+                            });
+                        }
+                    });
                     // Holding/dragging the scrollbar suspends following until
                     // release. Word clicks explicitly resume via follow-generation.
                     let down_view = view.clone();
@@ -6836,7 +6885,9 @@ impl RootView {
         }
         for (index, child) in node.children.iter().enumerate() {
             let painted = self.render_node(child, &format!("{path}-{index}"), window, cx);
-            let mut panel = resizable_panel().child(painted);
+            let mut panel = resizable_panel()
+                .child(painted)
+                .when(child.fixed_size.unwrap_or(false), |panel| panel.fixed());
             if let Some(size) = child.width.or(child.height).or(child.size) {
                 panel = panel.size(px(size));
             }
@@ -7138,6 +7189,11 @@ impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.parity.prune(&self.mounted_widgets);
         self.release.prune(&self.mounted_widgets);
+        self.release_090.prune(
+            &self.mounted_widgets,
+            &self.used_inputs,
+            &self.used_textareas,
+        );
         self.text_070.prune(
             &self.mounted_widgets,
             &self.used_inputs,
@@ -7222,7 +7278,7 @@ impl Render for RootView {
             used_colors.contains(key)
                 || matches!(
                     self.mounted_widgets.get(key).map(String::as_str),
-                    Some("color-picker")
+                    Some("color-picker" | "color-select")
                 )
         });
         let used_dates = std::mem::take(&mut self.used_dates);
@@ -8750,9 +8806,28 @@ fn node_theme_pref(node: &Node) -> Option<&str> {
 enum ThemeApply {
     Appearance(ThemeMode),
     Named(Rc<ThemeConfig>),
+    Cursor {
+        palette: Option<Box<ThemeApply>>,
+        policy: gpui_kit::base::input::CursorBlink,
+    },
 }
 
 fn resolve_theme(node: &Node, window: &Window, cx: &App) -> Option<ThemeApply> {
+    let palette = resolve_palette(node, window, cx);
+    match node
+        .cursor_blink
+        .as_ref()
+        .and_then(release_090::cursor_blink)
+    {
+        Some(policy) => Some(ThemeApply::Cursor {
+            palette: palette.map(Box::new),
+            policy,
+        }),
+        None => palette,
+    }
+}
+
+fn resolve_palette(node: &Node, window: &Window, cx: &App) -> Option<ThemeApply> {
     let pref = node_theme_pref(node)?;
     if catalog::is_appearance(pref) {
         let mode = match catalog::normalize(pref).as_str() {
@@ -8820,6 +8895,12 @@ fn activate_theme(applied: &ThemeApply, cx: &mut App) {
             theme.apply_config(&config);
         }
         ThemeApply::Named(config) => Theme::global_mut(cx).apply_config(config),
+        ThemeApply::Cursor { palette, policy } => {
+            if let Some(palette) = palette {
+                activate_theme(palette, cx);
+            }
+            Theme::global_mut(cx).cursor_blink = *policy;
+        }
     }
     Theme::sync_base(cx);
 }

@@ -2,7 +2,7 @@
 
 The current source inventory and parity findings are in [gpui-kit-parity.md](gpui-kit-parity.md). The contract notes below describe the existing adapters; the linked audit records the additional composition APIs and remaining gaps.
 
-clj-gpui 0.1.0 requires **[GPUI Kit 0.7.0](https://crates.io/crates/gpui-kit/0.7.0)** (`gpui-kit` facade → `gpui-pre` 0.3.7 + `gpui-component` 0.7.0 + `gpui-kit-assets`). This document is the inventory of that exact crate, not later git `main`.
+clj-gpui 0.1.0 requires **[GPUI Kit 0.9.0](https://crates.io/crates/gpui-kit/0.9.0)** (`gpui-kit` facade → `gpui-pre` 0.3.11 + `gpui-component` 0.9.0 + `gpui-kit-assets`). This document is the inventory of that exact crate, not later git `main`.
 
 0.5.1 names (`ui/text-field`, `ui/divider`) were dropped. Data tables are `ui/data-table`. `ui/table` is Kit's declarative `Table`.
 
@@ -28,7 +28,7 @@ Coverage-table **status** is not Kit public-API parity by itself:
 
 ## Coverage table
 
-| GPUI Kit 0.6 | clj-gpui API | status | class | notes |
+| GPUI Kit 0.9 | clj-gpui API | status | class | notes |
 |----------------------|--------------|--------|-------|-------|
 | `button::Button` | `ui/button` | ✅ | A | Variants, compact, disabled, loading, full-catalog or inline-SVG icon, native tooltip plus cardinal `:tooltip-placement`, rounded, dropdown-caret, toggled, a11y (`accessibility-label` / `:id` / `:role`), tab-index / tab-stop (omit = 0 / true). Nested `:custom-variant` is Kit `ButtonCustomVariant` (`color` / `foreground` / `hover` / `active` / `shadow`); hex `:color` there is not host text color |
 | `checkbox::Checkbox` | `ui/checkbox` | ✅ | A | 0-arg `:on-click` (unchanged). Native `:tooltip`, `:accessibility-label`, `:role`, tab-index / tab-stop. `:shape :circle` is a clj-gpui extra (no Kit a11y) |
@@ -98,6 +98,10 @@ Coverage-table **status** is not Kit public-API parity by itself:
 | ButtonGroup | `button-group` | See audit | — | Added native grouped buttons, axis, multiple selection, compact/outline, disabled, index-vector callback |
 | `button::ToggleGroup` | `ui/toggle-group` | ✅ | B | Independent multi-toggle (not exclusive). `value` / `:on-change` are vectors of original ids. `:segmented` joins borders. `:variant` `:ghost` / `:outline` |
 | `color_picker::ColorPicker` | `ui/color-picker` | ✅ | C | Hex string / JSON `null`. Host `ColorPickerState`. `:featured-colors` is a hex list (omit keeps Kit swatches; `[]` is none); not host/layout `:color`. `:icon`, `:accessibility-label`, `:placement` / `:anchor` (omit = Kit `TopLeft`) |
+| `color_picker::ColorSelect` | `ui/color-select` | ✅ | C | Framed color field sharing the ColorPicker value/state contract; placeholder, featured colors and accessibility label |
+| `diff::{Diff, DiffState}` | `ui/diff` | ✅ | C | Supplied patches, source text or conflicts; unified/split mode, retained selection/scroll, annotations, gutter markers and line decorations. [Options and event payloads](gpui-kit-0.9.0-migration.md#diff) |
+| `speech::{SpeechButton, SpeechWaveform, SpeechIndicator}` | `ui/speech-button`, `ui/speech-waveform`, `ui/speech-indicator` | ✅ | C | Shared native session via `:speech-id`; `:on-speech` events; platform recognition and permission requirements [documented here](gpui-kit-0.9.0-migration.md#speech) |
+| `resizable::ResizeHandle` | `ui/resize-handle` | ✅ | B | Native standalone divider; window-space drag coordinates; application owns the dimension |
 | DatePicker, DatePickerState, DateRangePreset | `date-picker` | See audit | — | Added date format, year range, disabled dates and presets; existing range/clear/appearance |
 | DockArea / DockLayout / Panel / DockSkin | `dock` | See audit | — | Shared child renderer, controlled panel selection, custom title/suffix/style and per-panel title/zoom/visibility controls |
 | `resizable::*` | `ui/resizable` | ✅ | C | Host `ResizableState`. `:on-change` is px size array |
@@ -113,12 +117,12 @@ Coverage-table **status** is not Kit public-API parity by itself:
 | `Inspector` | — | ❌ | D | Debug-only |
 | `gpui-fps` | `:chrome :dev` | ✅ | D | Overlay HUD on the relative root; hidden when `:chrome :app` |
 | `History` | — | ❌ | E | Undo stack, not UI |
-| `webview` | — | ❌ | D | **Intentionally unsupported.** `gpui-wry` is a standalone WebView stack. clj-gpui does not carry it; wrap it later only if an app needs an embedded browser |
+| `webview` | — | ❌ | D | **Intentionally unsupported.** `gpui-webview` is a standalone WebView stack. clj-gpui does not carry it; wrap it later only if an app needs an embedded browser |
 | `gpui-shell` | — | ❌ | D | **Intentionally unsupported.** Kit's QuickJS scripting runtime. [ClojureScript uses Node.js](clojurescript.md) with the existing host instead |
 | `animation` helpers | — | ❌ | E | Not a control |
 | `IndexPath` / `Rope` / geometry | — | ❌ | E | Host types |
 
-The additional native families (Carousel, Empty, InputGroup, standalone Calendar and composition parts) and their property audit are listed in [gpui-kit-parity.md](gpui-kit-parity.md). `gpui-fps` paints on `:chrome :dev`. `gpui-shell` and `gpui-wry` remain intentionally unsupported.
+The additional native families (Carousel, Empty, InputGroup, standalone Calendar and composition parts) and their property audit are listed in [gpui-kit-parity.md](gpui-kit-parity.md). `gpui-fps` paints on `:chrome :dev`. `gpui-shell` and `gpui-webview` remain intentionally unsupported.
 
 ## State, overlays and extension contracts
 
@@ -128,7 +132,7 @@ RootView paints Kit's dialog, sheet and notification layers. Deferred builders r
 
 Dialog close/confirm/cancel callbacks remain batched with the close notification. Kit owns one sheet; the last open sheet in tree order wins. Notifications keep their existing identity and autohide lifetime when callback functions change. Native menus are presentation snapshots whose Actions store semantic paths and resolve current callbacks when selected. The in-window `ui/app-menu-bar` uses the same Action bridge without replacing the OS application's global menu snapshot.
 
-Host-owned entities retain input, selection, scrolling and navigation state. The new Carousel and Calendar families use this same lifecycle. Dock layout dumps round-trip through `:on-layout-change` / `:dock-layout` while retaining matching panel entities. `gpui-shell` and `gpui-wry` remain intentionally unsupported.
+Host-owned entities retain input, selection, scrolling and navigation state. The new Carousel and Calendar families use this same lifecycle. Dock layout dumps round-trip through `:on-layout-change` / `:dock-layout` while retaining matching panel entities. `gpui-shell` and `gpui-webview` remain intentionally unsupported.
 
 ## Callback payloads (protocol v11)
 
@@ -186,6 +190,6 @@ The wire still uses JSON strings. `gpui.ui` keeps a map of wire id → original 
 | `dock` | `:on-panel-event` | `{:id :event :value}`; id is a wire string |
 | custom Settings field | `:on-reset` | none (0-arg) |
 
-## GPUI Kit 0.7 additions
+## GPUI Kit 0.9 additions
 
-See [the 0.7 migration guide](gpui-kit-0.7.0-migration.md) for Toolbar, Questionnaire, TimeField, date/time values, inline tokens, range decorations, Markdown search and chart options. All new native compound parts are available through `gpui.ui`.
+See [the 0.9 migration guide](gpui-kit-0.9.0-migration.md) for ColorSelect, Diff, speech widgets, ResizeHandle, theming and the additions since 0.7. Existing Toolbar, Questionnaire and TimeField bindings remain available.

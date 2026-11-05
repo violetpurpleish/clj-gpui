@@ -1,5 +1,5 @@
 (defn info-plist
-  [{:keys [name title version id backend]}]
+  [{:keys [name title version id backend microphone-usage-description speech-recognition-usage-description]}]
   (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
        "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
@@ -18,6 +18,10 @@
        (if (= :cljs backend) "13.0" "12.0") "</string>\n"
        "  <key>NSHighResolutionCapable</key><true/>\n"
        "  <key>NSSupportsAutomaticTermination</key><false/>\n"
+       "  <key>NSMicrophoneUsageDescription</key><string>"
+       (xml-escape (or microphone-usage-description "Use the microphone for dictation when you start speech input.")) "</string>\n"
+       "  <key>NSSpeechRecognitionUsageDescription</key><string>"
+       (xml-escape (or speech-recognition-usage-description "Convert your speech to text when you start dictation.")) "</string>\n"
        "</dict>\n"
        "</plist>\n"))
 
@@ -269,7 +273,7 @@
        "Priority: optional\n"
        "Architecture: " (or arch (:deb (linux-arch))) "\n"
        "Maintainer: " maintainer "\n"
-       "Depends: libc6, libstdc++6, libgcc-s1, libvulkan1, libxkbcommon0, libwayland-client0 | libx11-6\n"
+       "Depends: libc6, libstdc++6, libgcc-s1, libasound2 | libasound2t64, libvulkan1, libxkbcommon0, libwayland-client0 | libx11-6\n"
        "Description: " description "\n"
        " Native GPUI application packaged with a bundled "
        (if (= :cljs backend) "Bun" "Java") " runtime\n"

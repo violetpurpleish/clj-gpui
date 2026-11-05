@@ -1063,6 +1063,47 @@ impl Content {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 pub struct Node {
+    #[serde(default, rename = "icon-paths")]
+    pub icon_paths: std::collections::HashMap<String, String>,
+    #[serde(default, rename = "diff-mode")]
+    pub diff_mode: Option<String>,
+    #[serde(default, rename = "context-lines")]
+    pub context_lines: Option<usize>,
+    #[serde(default, rename = "diff-options")]
+    pub diff_options: Option<Value>,
+    #[serde(default, rename = "diff-action")]
+    pub diff_action: Option<Value>,
+    #[serde(default, rename = "diff-decorations")]
+    pub diff_decorations: Vec<Value>,
+    #[serde(default, rename = "speech-id")]
+    pub speech_id: Option<String>,
+    #[serde(default, rename = "show-when-unsupported")]
+    pub show_when_unsupported: Option<bool>,
+    #[serde(default, rename = "on-speech")]
+    pub on_speech: Option<String>,
+    #[serde(default, rename = "on-edits")]
+    pub on_edits: Option<String>,
+    #[serde(default, rename = "on-token-hover")]
+    pub on_token_hover: Option<String>,
+    #[serde(default, rename = "on-add-annotation")]
+    pub on_add_annotation: Option<String>,
+    #[serde(default, rename = "cursor-blink")]
+    pub cursor_blink: Option<Value>,
+    #[serde(default, rename = "fixed-size")]
+    pub fixed_size: Option<bool>,
+    #[serde(default, rename = "gutter-decorations")]
+    pub gutter_decorations: Vec<Value>,
+    #[serde(default, rename = "overview-ruler-decorations")]
+    pub overview_ruler_decorations: Vec<Value>,
+    #[serde(default, rename = "entrance")]
+    pub entrance: Option<String>,
+    #[serde(default, rename = "centered")]
+    pub centered: Option<bool>,
+    #[serde(default, rename = "appear")]
+    pub appear: Option<bool>,
+    #[serde(default, rename = "appear-key")]
+    pub appear_key: Option<String>,
+
     #[serde(default, rename = "scroll-offset")]
     pub scroll_offset: Option<[f32; 2]>,
     #[serde(default)]

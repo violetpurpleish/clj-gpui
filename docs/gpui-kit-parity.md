@@ -1,17 +1,17 @@
 # GPUI Kit parity audit
 
-Audit target: the repository's locked **gpui-kit 0.7.0**, **gpui-component 0.7.0**, **gpui-base 0.7.0**, and **gpui-pre 0.3.7**. This is a source audit, not an assertion that having a constructor is equivalent to exposing every native API. `gpui-shell` and `gpui-wry` remain the two deliberate subsystem exclusions.
+Audit target: the repository's locked **gpui-kit 0.9.0**, **gpui-component 0.9.0**, **gpui-base 0.9.0**, and **gpui-pre 0.3.11**. This is a source audit, not an assertion that having a constructor is equivalent to exposing every native API. `gpui-shell` and `gpui-webview` remain the two deliberate subsystem exclusions.
 
-The reproducible source indexes record [Component declarations and trait contracts](inventory/gpui-component-0.7.0.tsv) and [Base declarations and trait contracts](inventory/gpui-base-0.7.0.tsv). These indexes include implementation modules; public reachability and macro-generated APIs require the family audit below. Regenerate it with:
+The reproducible source indexes record [Component declarations and trait contracts](inventory/gpui-component-0.9.0.tsv) and [Base declarations and trait contracts](inventory/gpui-base-0.9.0.tsv). These indexes include implementation modules; public reachability and macro-generated APIs require the family audit below. Regenerate it with:
 
 ```sh
-python3 scripts/inventory-kit.py /path/to/gpui-component-0.7.0/src > docs/inventory/gpui-component-0.7.0.tsv
-python3 scripts/inventory-kit.py /path/to/gpui-base-0.7.0/src > docs/inventory/gpui-base-0.7.0.tsv
+python3 scripts/inventory-kit.py /path/to/gpui-component-0.9.0/src > docs/inventory/gpui-component-0.9.0.tsv
+python3 scripts/inventory-kit.py /path/to/gpui-base-0.9.0/src > docs/inventory/gpui-base-0.9.0.tsv
 ```
 
 The checks below include inherent builders, `ParentElement`/typed child contracts, state and delegate rendering hooks, callback normalization in `gpui.ui`, wire deserialization, and the production renderer. Native implementation details such as entities, focus handles, scroll handles and action types are represented by retained host state and declarative properties, rather than passed across the JVM boundary.
 
-The [0.7.0 migration audit](gpui-kit-0.7.0-migration.md) describes the new Toolbar, Questionnaire and TimeField families, additions to existing widgets, and the Root/theme/DatePicker migration. Older source inventories remain available for comparison.
+The [0.9.0 migration audit](gpui-kit-0.9.0-migration.md) covers ColorSelect, Diff, SpeechButton/Waveform/Indicator, ResizeHandle, theme compatibility and additions to existing widgets since 0.7.0. Older source inventories remain available for comparison.
 
 ## Child composition
 
@@ -139,12 +139,12 @@ These require further protocol/API work to reach literal native-API parity. They
 
 The pinned Base `CompletionProvider::resolve_completions` hook has no caller and takes the uninhabited `lsp_types::request::Completion` marker instead of completion items; it is not an operational feature that the binding can expose.
 
-Kit 0.7.0 fixes Select dismissal forwarding and individual Accordion disabled state. `ui/select` now exposes `:on-dismiss`.
+Kit 0.7.0 fixed Select dismissal forwarding and individual Accordion disabled state. `ui/select` now exposes `:on-dismiss`.
 
 ## Verification
 
 The production tests in `host/src/renderer_integration_tests.rs` run `RootView` inside the actual Kit `Root`. They check stateful children under dialogs, sheets, dock panels, navigation pages, data-table cells and both scrollers; native control entity retention; anonymous slot identities; new native families; live callbacks after tree replacement; controlled calendar updates without callback echo; Markdown block/inline controls; provider request/reply routing; dock layout echoes without reload loops; offscreen callback freshness; Unicode selection clipping; annotation updates; and native Textarea growth/search without entity replacement. Clojure tests exercise normalization, nullable booleans and callback export. Explicit platform rendering tests are separate from the headless interaction suite.
 
-The earlier 0.6.6 validation baseline is recorded in [its migration notes](gpui-kit-0.6.6-migration.md). Current release verification and API changes are documented in [the 0.7.0 migration guide](gpui-kit-0.7.0-migration.md).
+The earlier 0.6.6 validation baseline is recorded in [its migration notes](gpui-kit-0.6.6-migration.md). Current release verification and API changes are documented in [the 0.9.0 migration guide](gpui-kit-0.9.0-migration.md).
 
 Usage: [widget composition](widget-composition.md), [editor providers/search/clipboard](editor-providers.md).

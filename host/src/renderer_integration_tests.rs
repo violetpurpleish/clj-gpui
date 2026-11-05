@@ -393,7 +393,7 @@ async fn episode_scroller_virtualizes_rich_controls_and_retains_search(cx: &mut 
                 cx,
             );
             window.dispatch_event(
-                gpui_kit::ScrollWheelEvent {
+                gpui_kit::ScrollEvent {
                     position,
                     delta: ScrollDelta::Pixels(point(px(0.), px(-80.))),
                     ..Default::default()
@@ -1964,12 +1964,18 @@ async fn production_markdown_selection_autoscroll_stops_on_release(cx: &mut Test
     let bounds = visual
         .debug_bounds("production-markdown-viewport")
         .expect("production Markdown viewport bounds");
-    let start = point(bounds.left() + px(30.), bounds.top() + px(30.));
+    // Kit 0.8 tightened paragraph spacing; start inside the first line, not its trailing gap.
+    let start = point(bounds.left() + px(30.), bounds.top() + px(8.));
     let edge = point(bounds.left() + px(60.), bounds.bottom() - px(2.));
 
     visual.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    visual.update(|window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
     visual.simulate_mouse_move(edge, Some(MouseButton::Left), Modifiers::default());
     visual.update(|window, cx| window.render_frame(cx));
+    visual.run_until_parked();
     let before = visual.update(TextSelection::selected_text);
     assert!(!before.is_empty(), "the drag must start a text selection");
 
@@ -3769,4 +3775,338 @@ async fn kit_070_toolbar_navigation_and_select_dismissal(cx: &mut TestAppContext
         ],
         "Confirm must precede Dismiss across the callback acknowledgement barrier"
     );
+}
+
+#[gpui_kit::test]
+async fn kit_090_diff_annotations_speech_and_color_retain_live_state(cx: &mut TestAppContext) {
+    use gpui_kit::component::{
+        diff::{DiffLineRange, DiffMode, DiffSide},
+        speech::{SpeechEvent, SpeechStatus},
+    };
+    cx.update(gpui_kit::init);
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(800.), px(700.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let mut tree:Node=serde_json::from_value(json!({"type":"window","chrome":"app","children":[
+        {"type":"color-select","id":"accent","value":"#336699","accessibility-label":"Accent"},
+        {"type":"diff","id":"review","height":300,"text":"--- a/a.clj\n+++ b/a.clj\n@@ -1 +1 @@\n-old\n+new\n","on-change":"old-review",
+         "items":[{"id":"note","value":{"path":"a.clj","side":"modified","line":1},"content":{"type":"button","id":"resolve-review","text":"Resolve","on-click":"old-resolve"}}]},
+        {"type":"speech-button","id":"voice-button","speech-id":"voice","show-when-unsupported":true,"on-speech":"old-speech"},
+        {"type":"speech-waveform","id":"voice-wave","speech-id":"voice","height":32},
+        {"type":"speech-indicator","id":"voice-indicator","speech-id":"voice"}
+    ]})).unwrap();
+    event_tx
+        .send(HostEvent::tree(tree.clone(), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let view = production_view(handle, cx);
+    let diff = view.read_with(cx, |v, _| v.test_diff_state("review").unwrap());
+    let speech = view.read_with(cx, |v, _| v.test_speech_state("voice").unwrap());
+    assert_eq!(speech.read_with(cx, |s, _| s.status()), SpeechStatus::Idle);
+    assert_eq!(
+        diff.read_with(cx, |s, _| s.files()[0].path().to_string()),
+        "a.clj"
+    );
+    tree.children[1].diff_mode = Some("split".into());
+    tree.children[1].on_change = Some("new-review".into());
+    tree.children[1].items[0].content.as_mut().unwrap().on_click = Some("new-resolve".into());
+    tree.children[2].on_speech = Some("new-speech".into());
+    event_tx
+        .send(HostEvent::tree(tree.clone(), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        view.read_with(cx, |v, _| v.test_diff_state("review").unwrap().entity_id()),
+        diff.entity_id()
+    );
+    assert_eq!(
+        view.read_with(cx, |v, _| v.test_speech_state("voice").unwrap().entity_id()),
+        speech.entity_id()
+    );
+    assert_eq!(diff.read_with(cx, |s, _| s.mode()), DiffMode::Split);
+    drain(&cmd_rx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.click("resolve-review", cx)
+    })
+    .unwrap();
+    settle_root(handle, cx);
+    let commands = drain(&cmd_rx);
+    assert!(
+        callback_pairs(&commands)
+            .iter()
+            .any(|(id, _)| id == "new-resolve")
+    );
+    event_tx
+        .send(HostEvent::tree(
+            tree.clone(),
+            callback_sequence(&commands),
+            vec![],
+        ))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    speech.update(cx, |_, cx| cx.emit(SpeechEvent::Final("Hello".into())));
+    settle_root(handle, cx);
+    let commands = drain(&cmd_rx);
+    assert!(
+        callback_pairs(&commands)
+            .iter()
+            .any(|(id, v)| id == "new-speech" && v.as_ref().unwrap()["text"] == "Hello")
+    );
+    event_tx
+        .send(HostEvent::tree(
+            tree.clone(),
+            callback_sequence(&commands),
+            vec![],
+        ))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    diff.update(cx, |s, cx| {
+        let selection = DiffLineRange::new("a.clj", DiffSide::Modified, 1, 1);
+        s.set_selected_lines(Some(selection.clone()), cx);
+        cx.emit(gpui_kit::component::diff::DiffEvent::SelectionChanged(
+            Some(selection),
+        ));
+    });
+    settle_root(handle, cx);
+    let commands = drain(&cmd_rx);
+    assert!(
+        callback_pairs(&commands)
+            .iter()
+            .any(|(id, v)| id == "new-review"
+                && v.as_ref().unwrap()["selection"]["range"] == json!([1, 1]))
+    );
+    tree.children.clear();
+    event_tx
+        .send(HostEvent::tree(tree, callback_sequence(&commands), vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert!(
+        view.read_with(cx, |v, _| v.test_diff_state("review").is_none()
+            && v.test_speech_state("voice").is_none())
+    );
+}
+
+#[gpui_kit::test]
+async fn kit_090_input_edit_batches_and_editor_marks_survive_rerenders(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(640.), px(450.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let mut tree:Node=serde_json::from_value(json!({"type":"window","chrome":"app","children":[
+        {"type":"input","id":"edits","text":"","on-edits":"old-edits","on-change":"value-change"},
+        {"type":"editor","id":"marked","text":"abcd","height":150,"gutter-decorations":[{"range":[1,3],"color":"#336699"}],"overview-ruler-decorations":[{"range":[1,3],"lane":"right"}]}
+    ]})).unwrap();
+    event_tx
+        .send(HostEvent::tree(tree.clone(), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    let view = production_view(handle, cx);
+    let editor = view.read_with(cx, |v, _| v.test_editor_state("marked").unwrap());
+    assert_eq!(
+        view.read_with(cx, |v, cx| v.test_editor_mark_ranges("marked", cx)),
+        vec![1..3]
+    );
+    tree.children[0].on_edits = Some("new-edits".into());
+    event_tx
+        .send(HostEvent::tree(tree.clone(), None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    drain(&cmd_rx);
+    let input = view.read_with(cx, |v, _| v.test_input_state("edits").unwrap());
+    cx.update_window(handle.into(), |_, window, cx| {
+        input.update(cx, |s, cx| s.focus(window, cx));
+        window.input("é", cx);
+    })
+    .unwrap();
+    settle_root(handle, cx);
+    let commands = drain(&cmd_rx);
+    let callbacks = callback_pairs(&commands);
+    assert!(
+        callbacks.iter().any(|(id, v)| id == "new-edits"
+            && v.as_ref().unwrap()[0]["new-end-byte"] == 2
+            && v.as_ref().unwrap()[0]["text"] == "é"),
+        "{callbacks:?}"
+    );
+    assert_eq!(
+        callbacks.iter().filter(|(id, _)| id == "new-edits").count(),
+        1
+    );
+    assert_eq!(
+        callbacks
+            .iter()
+            .filter(|(id, _)| id == "value-change")
+            .count(),
+        1
+    );
+    assert!(
+        callbacks
+            .iter()
+            .any(|(id, value)| id == "value-change" && value.as_ref() == Some(&json!("é")))
+    );
+    assert!(!callbacks.iter().any(|(id, _)| id == "old-edits"));
+    cx.update_window(handle.into(), |_, window, cx| {
+        editor.update(cx, |s, cx| {
+            s.focus(window, cx);
+            s.replace_text_in_range(Some(0..0), "X", window, cx)
+        })
+    })
+    .unwrap();
+    assert_eq!(
+        view.read_with(cx, |v, cx| v.test_editor_mark_ranges("marked", cx)),
+        vec![2..4]
+    );
+    tree.children[0].text = Some("é".into());
+    tree.children[1].text = Some("Xabcd".into());
+    event_tx
+        .send(HostEvent::tree(
+            tree.clone(),
+            callback_sequence(&commands),
+            vec![],
+        ))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert_eq!(
+        view.read_with(cx, |v, cx| v.test_editor_mark_ranges("marked", cx)),
+        vec![2..4]
+    );
+    tree.children[1].gutter_decorations.clear();
+    tree.children[1].overview_ruler_decorations.clear();
+    event_tx
+        .send(HostEvent::tree(tree, None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    assert!(
+        view.read_with(cx, |v, cx| v.test_editor_mark_ranges("marked", cx))
+            .is_empty()
+    );
+}
+
+#[gpui_kit::test]
+async fn kit_090_resize_handle_reports_drag_outside_its_band(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let handle = cx.open_window(size(px(640.), px(350.)), |window, cx| {
+        let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+        Root::new(view, window, cx)
+    });
+    let tree:Node=serde_json::from_value(json!({"type":"window","chrome":"app","children":[
+        {"type":"hstack","height":200,"align":"stretch","children":[
+            {"type":"label","text":"Sidebar","width":180},
+            {"type":"resize-handle","id":"sidebar-edge","orientation":"horizontal","on-change":"resize"},
+            {"type":"label","text":"Content","flex":1}
+        ]}
+    ]})).unwrap();
+    event_tx
+        .send(HostEvent::tree(tree, None, vec![]))
+        .await
+        .unwrap();
+    settle_root(handle, cx);
+    drain(&cmd_rx);
+    cx.update_window(handle.into(), |_, window, cx| {
+        let start = window.find("sidebar-edge").bounds().center();
+        window.drag(start, start + point(px(70.), px(0.)), cx);
+    })
+    .unwrap();
+    settle_root(handle, cx);
+    assert!(
+        callback_pairs(&drain(&cmd_rx))
+            .iter()
+            .any(|(id, value)| id == "resize" && value.as_ref().unwrap()["x"].as_f64().is_some())
+    );
+}
+
+#[gpui_kit::test]
+async fn kit_090_multiline_edits_share_the_value_callback_batch(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    for kind in ["textarea", "editor"] {
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let (event_tx, event_rx) = async_channel::unbounded();
+        let handle = cx.open_window(size(px(640.), px(350.)), |window, cx| {
+            let view = cx.new(|cx| RootView::new(7331, cmd_tx, event_rx, window, cx));
+            Root::new(view, window, cx)
+        });
+        let mut tree: Node = serde_json::from_value(json!({"type":"window","chrome":"app","children":[
+            {"type":kind,"id":"draft","text":"","height":150,"on-edits":"edits","on-change":"change"}
+        ]})).unwrap();
+        event_tx
+            .send(HostEvent::tree(tree.clone(), None, vec![]))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        let view = production_view(handle, cx);
+        let initial = drain(&cmd_rx);
+        assert!(
+            callback_pairs(&initial).is_empty(),
+            "initial {kind}: {initial:?}"
+        );
+        cx.update_window(handle.into(), |_, window, cx| {
+            if kind == "editor" {
+                let state = view.read(cx).test_editor_state("draft").unwrap();
+                state.update(cx, |state, cx| state.focus(window, cx));
+            } else {
+                let state = view.read(cx).test_textarea_state("draft").unwrap();
+                state.update(cx, |state, cx| state.focus(window, cx));
+            }
+            window.input("é", cx);
+        })
+        .unwrap();
+        settle_root(handle, cx);
+        let commands = drain(&cmd_rx);
+        assert!(
+            commands.iter().any(
+                |command| matches!(command, Cmd::CallbackBatch { callbacks, seq: Some(_), .. }
+            if callbacks.len() == 2
+                && callbacks[0].id == "edits"
+                && callbacks[0].value.as_ref().unwrap()[0]["new-end-byte"] == 2
+                && callbacks[1].id == "change"
+                && callbacks[1].value == Some(json!("é")))
+            ),
+            "{kind}: {commands:?}"
+        );
+        tree.children[0].text = Some("é".into());
+        event_tx
+            .send(HostEvent::tree(
+                tree.clone(),
+                callback_sequence(&commands),
+                vec![],
+            ))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        assert!(
+            callback_pairs(&drain(&cmd_rx)).is_empty(),
+            "controlled synchronization is silent for {kind}"
+        );
+        tree.children[0].on_edits = None;
+        tree.children[0].on_change = Some("only-change".into());
+        event_tx
+            .send(HostEvent::tree(tree, None, vec![]))
+            .await
+            .unwrap();
+        settle_root(handle, cx);
+        cx.update_window(handle.into(), |_, window, cx| window.input("x", cx))
+            .unwrap();
+        settle_root(handle, cx);
+        assert_eq!(
+            callback_pairs(&drain(&cmd_rx)),
+            vec![("only-change".into(), Some(json!("éx")))],
+            "disabling edit events restores the existing Change path for {kind}"
+        );
+    }
 }

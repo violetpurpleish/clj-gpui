@@ -2282,3 +2282,43 @@
     (is (false? (get-in wire [:items 0 :tooltip-content :disabled])))
     (runtime/invoke-callback! (get-in wire [:items 0 :tooltip-content :on-click]))
     (is (= 1 @seen))))
+
+(deftest kit-090-widgets-and-nested-review-callbacks
+  (let [seen (atom [])
+        tree (runtime/export-tree
+              (ui/window {:cursor-blink {:interval-ms 700 :idle-timeout-ms 4000}
+                          :icon-paths {"icons/check.svg" "icons/star.svg"}}
+                         (ui/color-select "#123456" {:id "color" :size :small :on-change #(swap! seen conj %)})
+                         (ui/diff "patch" {:id "review" :diff-mode :split
+                                           :annotations [{:id "note" :value {:path "a.clj" :side :modified :line 1}
+                                                          :content (ui/button "Resolve" #(swap! seen conj :resolved))}]
+                                           :gutter-markers [{:id "mark" :value {:path "a.clj" :side :original :line 2}
+                                                             :content (ui/button "Comment" #(swap! seen conj :comment))}]
+                                           :on-add-annotation #(swap! seen conj %)})
+                         (ui/speech-button {:speech-id "voice" :show-when-unsupported nil :on-speech #(swap! seen conj %)})
+                         (ui/speech-waveform {:speech-id "voice" :variant :liquid})
+                         (ui/speech-indicator {:speech-id "voice"})
+                         (ui/resize-handle {:orientation :horizontal :on-change #(swap! seen conj %)})))
+        nodes (:children tree)]
+    (is (= ["color-select" "diff" "speech-button" "speech-waveform" "speech-indicator" "resize-handle"] (mapv :type nodes)))
+    (is (= "small" (get-in nodes [0 :control-size])))
+    (is (= "split" (get-in nodes [1 :diff-mode])))
+    (is (= "modified" (get-in nodes [1 :items 0 :value :side])))
+    (is (= "voice" (get-in nodes [3 :speech-id])))
+    (is (= 700 (get-in tree [:cursor-blink :interval-ms])))
+    (runtime/invoke-callback! (get-in nodes [1 :items 0 :content :on-click]))
+    (runtime/invoke-callback! (get-in nodes [1 :options 0 :content :on-click]))
+    (runtime/invoke-callback! (get-in nodes [2 :on-speech]) {:event "final" :text "Hello"})
+    (runtime/invoke-callback! (get-in nodes [5 :on-change]) {:x 200 :y 40})
+    (is (= [:resolved :comment {:event "final" :text "Hello"} {:x 200 :y 40}] @seen))))
+
+(deftest kit-090-text-event-export
+  (let [seen (atom [])
+        tree (runtime/export-tree
+              (ui/input "@Ada" {:cursor-blink :steady
+                                :on-edits #(swap! seen conj %)
+                                :on-token-hover #(swap! seen conj %)}))]
+    (is (= "steady" (:cursor-blink tree)))
+    (runtime/invoke-callback! (:on-edits tree) [{:start-byte 0 :new-end-byte 1 :text "A"}])
+    (runtime/invoke-callback! (:on-token-hover tree) {:id "ada" :hovered true})
+    (is (= [[{:start-byte 0 :new-end-byte 1 :text "A"}] {:id "ada" :hovered true}] @seen))))

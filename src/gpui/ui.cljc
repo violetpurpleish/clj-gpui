@@ -4102,3 +4102,44 @@
   "Native layout for Questionnaire previous, skip, next and submit parts."
   [& args]
   (questionnaire-part :questionnaire-actions args))
+
+(defn color-select
+  "Framed color field. Shares color-picker values, featured colors and :on-change.
+  Also accepts :placeholder and :accessibility-label."
+  ([value] (color-select value {}))
+  ([value opts] (assoc (color-picker value opts) :type :color-select)))
+
+(defn diff
+  "Readonly unified/Git patch viewer. Stable :id retains selection and scrolling.
+  :diff-mode is :unified or :split; :context-lines defaults to 3.
+  :diff-options configures parsing/presentation; :diff-action requests navigation.
+  :annotations and :gutter-markers contain {:id :value {:path :side :line}
+  :content widget}; range decorations use :diff-decorations.
+  :on-change reports selection, file folding and conflict events."
+  ([patch] (diff patch {}))
+  ([patch opts]
+   (merge-widget {:type :diff :text (str patch)}
+                 (cond-> (dissoc opts :annotations :gutter-markers)
+                   (contains? opts :annotations) (assoc :items (:annotations opts))
+                   (contains? opts :gutter-markers) (assoc :options (:gutter-markers opts))))))
+
+(defn speech-button
+  "Native dictation toggle. :speech-id shares retained state with a waveform or
+  indicator. :on-speech receives {:event :text/:error}; no capture until clicked.
+  :show-when-unsupported displays a disabled control on unsupported platforms."
+  ([] (speech-button {}))
+  ([opts] (merge-widget {:type :speech-button} opts)))
+
+(defn speech-waveform
+  "Live microphone levels for :speech-id. :variant :liquid selects liquid motion."
+  ([opts] (merge-widget {:type :speech-waveform} opts)))
+
+(defn speech-indicator
+  "Compact live voice indicator for :speech-id, suitable inside a stop button."
+  ([opts] (merge-widget {:type :speech-indicator} opts)))
+
+(defn resize-handle
+  "Native standalone divider. :orientation is the resize axis; :placement is
+  :leading or :trailing. :on-change receives window coordinates {:x :y} while
+  dragging; the application owns the resized dimension."
+  ([opts] (merge-widget {:type :resize-handle} opts)))

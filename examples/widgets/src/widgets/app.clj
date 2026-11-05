@@ -1109,8 +1109,41 @@
                                       :point-count 7 :y-axis true :reference-lines [50] :grid-dashed true
                                       :y-tick-format {:suffix "%"} :tooltip-value #(str (:value %) "%")}))))
 
+(def ^:private review-patch
+  "--- a/greet.clj\n+++ b/greet.clj\n@@ -1,2 +1,2 @@\n (defn greet [name]\n-  (str \"Hi \" name))\n+  (str \"Hello, \" name))\n")
+
+(defn- kit-090-panel [state]
+  (ui/vstack {:gap 24}
+             (example "Color field" "Choose an accent with a framed color picker."
+                      (ui/color-select (:review-color state "#5686d9")
+                                       {:id "review-color" :placeholder "Choose a color"
+                                        :accessibility-label "Review accent" :on-change (set-key :review-color)}))
+             (example "Review changes" "Select source lines or switch between unified and split layouts."
+                      (ui/hstack {:gap 8}
+                                 (ui/button "Unified" #(swap! !state assoc :diff-mode :unified))
+                                 (ui/button "Split" #(swap! !state assoc :diff-mode :split)))
+                      (ui/diff review-patch {:id "review-diff" :height 240 :language "clojure"
+                                             :diff-mode (:diff-mode state :unified)
+                                             :on-change (set-key :diff-event)})
+                      (ui/label (str "Selection: " (get-in state [:diff-event :text] ""))))
+             (example "Dictation" "Start and stop recording with the microphone button."
+                      (ui/hstack {:gap 12}
+                                 (ui/speech-button {:id "dictation" :speech-id "review-dictation"
+                                                    :show-when-unsupported true :on-speech (set-key :speech-event)})
+                                 (ui/speech-waveform {:id "dictation-levels" :speech-id "review-dictation"
+                                                      :variant :liquid :width 220 :height 32}))
+                      (ui/label (or (get-in state [:speech-event :text])
+                                    (get-in state [:speech-event :error]) "Ready")))
+             (example "Steady caret" "This field keeps its caret visible without blinking."
+                      (ui/input (:steady-text state "Edit this text")
+                                {:id "steady-input" :cursor-blink :steady :on-change (set-key :steady-text)}))))
+
 (def ^:private pages
-  [{:id :kit-070
+  [{:id :kit-090
+    :label "New in 0.9"
+    :description "Diff review, color fields, dictation and caret settings."
+    :panels [kit-090-panel]}
+   {:id :kit-070
     :label "New in 0.7"
     :description "Toolbar, Questionnaire, TimeField and richer charts and text."
     :panels [kit-070-panel]}

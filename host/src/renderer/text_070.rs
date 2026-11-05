@@ -354,6 +354,11 @@ pub(super) fn input_tokens(mut input: Input, node: &Node, key: &str) -> Input {
         input = input
             .on_token_click(move |event, window, cx| emit_token_click(&key, event, window, cx));
     }
+    if node.on_token_hover.is_some() {
+        let key = key.to_string();
+        input = input
+            .on_token_hover(move |event, window, cx| emit_token_hover(&key, event, window, cx));
+    }
     input
 }
 pub(super) fn textarea_tokens(mut input: Textarea, node: &Node, key: &str) -> Textarea {
@@ -366,6 +371,11 @@ pub(super) fn textarea_tokens(mut input: Textarea, node: &Node, key: &str) -> Te
         let key = key.to_string();
         input = input
             .on_token_click(move |event, window, cx| emit_token_click(&key, event, window, cx));
+    }
+    if node.on_token_hover.is_some() {
+        let key = key.to_string();
+        input = input
+            .on_token_hover(move |event, window, cx| emit_token_hover(&key, event, window, cx));
     }
     input
 }
@@ -380,6 +390,25 @@ fn emit_token_click(
             key: key.into(),
             event: "token-click".into(),
             value: json!({"id":event.token().id().as_ref(),"text":event.token().text().as_ref(),"label":event.token().label().as_ref(),"range":[event.range().start,event.range().end]}),
+        },
+        cx,
+    );
+}
+
+fn emit_token_hover(
+    key: &str,
+    event: &gpui_component::input::InlineTokenHoverEvent,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let bounds = event.bounds();
+    window_action_emitter(window, cx)(
+        overlay::QueuedAction::WidgetValue {
+            key: key.into(),
+            event: "token-hover".into(),
+            value: json!({"id":event.token().id().as_ref(),"text":event.token().text().as_ref(),"label":event.token().label().as_ref(),
+            "range":[event.range().start,event.range().end],"hovered":event.is_hovered(),
+            "bounds":{"x":f32::from(bounds.origin.x),"y":f32::from(bounds.origin.y),"width":f32::from(bounds.size.width),"height":f32::from(bounds.size.height)}}),
         },
         cx,
     );

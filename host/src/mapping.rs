@@ -1016,7 +1016,17 @@ pub fn apply_kbd_chrome(mut kbd: Kbd, node: &Node) -> Kbd {
 
 /// Parse a GPUI keystroke; `None` when the string is not a keystroke.
 pub fn parse_keystroke(text: &str) -> Option<Keystroke> {
-    Keystroke::parse(text).ok()
+    Keystroke::parse_with_os(
+        text,
+        if cfg!(target_os = "macos") {
+            gpui::OperatingSystem::Mac
+        } else if cfg!(target_os = "windows") {
+            gpui::OperatingSystem::Windows
+        } else {
+            gpui::OperatingSystem::Linux
+        },
+    )
+    .ok()
 }
 
 pub fn parse_axis(value: Option<&str>) -> Axis {
@@ -1062,6 +1072,7 @@ pub fn parse_span(value: u32) -> usize {
 pub fn parse_tab_variant(value: Option<&str>) -> TabVariant {
     match value.map(catalog::normalize) {
         Some(name) => match name.as_str() {
+            "folder" => TabVariant::Folder,
             "outline" => TabVariant::Outline,
             "pill" => TabVariant::Pill,
             "segmented" => TabVariant::Segmented,
@@ -1628,6 +1639,7 @@ pub fn apply_textarea_chrome(mut input: Textarea, node: &Node) -> Textarea {
 
 /// Kit `Editor` chrome, native menu and paste handling. Providers live on its retained state.
 pub fn apply_editor_chrome(mut editor: Editor, node: &Node) -> Editor {
+    editor = editor.with_size(parse_scale(node.control_size.as_deref()));
     if let Some(appearance) = node.appearance {
         editor = editor.appearance(appearance);
     }

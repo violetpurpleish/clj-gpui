@@ -336,7 +336,8 @@ mod macos {
 
         // The default pie radius must come from its actual layout, including
         // a flex-filled viewport taller than chart_viewport's 180px fallback.
-        // Explicit and partial per-slice radii must still win.
+        // Explicit and partial per-slice radii must still win. Disable entrance
+        // motion so these samples measure final geometry, not the first frame.
         for (name, outer, items, samples) in [
             (
                 "pie-layout-radius",
@@ -365,7 +366,7 @@ mod macos {
             ),
         ] {
             let mut chart = json!({
-                "type": "chart", "id": "pie", "variant": "pie", "flex": 1,
+                "type": "chart", "appear": false, "id": "pie", "variant": "pie", "flex": 1,
                 "inner-radius": 40, "items": items
             });
             if let Some(radius) = outer {
@@ -420,7 +421,7 @@ mod macos {
                             {"id":"language","label":"Choose a language","required":true,"choices":[{"id":"clj","label":"Clojure"},{"id":"rs","label":"Rust"}]}
                         ]},
                         {"type":"vstack","width":270,"gap":12,"children":[
-                            {"type":"chart","id":"new-line","variant":"line","height":160,"y-domain":[0,100],"point-count":5,"y-axis":true,"y-tick-count":3,"x-tick-count":3,"grid-columns":4,"grid-dashed":true,"reference-lines":[50],"items":[{"label":"Mon","value":20},{"label":"Tue","value":80},{"label":"Wed","value":40}]},
+                            {"type":"chart","appear":false,"id":"new-line","variant":"line","height":160,"y-domain":[0,100],"point-count":5,"y-axis":true,"y-tick-count":3,"x-tick-count":3,"grid-columns":4,"grid-dashed":true,"reference-lines":[50],"items":[{"label":"Mon","value":20},{"label":"Tue","value":80},{"label":"Wed","value":40}]},
                             {"type":"markdown","id":"new-search","height":60,"text":"Search **across formatting** here.","search": if annotated { json!({"query":"across formatting","color":"#ffe100"}) } else { json!(null) }}
                         ]}
                     ]}
@@ -460,6 +461,51 @@ mod macos {
             .save("/private/tmp/clj-gpui-kit-070.png")
             .unwrap();
 
-        println!("rendering: 8 passed (production RootView, Metal)");
+        let mut review_images = Vec::new();
+        for decorated in [false, true] {
+            let tree = serde_json::from_value(json!({
+                "type":"window", "chrome":"app", "theme":"light", "padding":16, "gap":12,
+                "children":[
+                    {"type":"color-select","id":"review-accent","value":"#336699","accessibility-label":"Review accent","width":260},
+                    {"type":"diff","id":"review-patch","height":220,"diff-mode":"split",
+                     "text":"--- a/greet.clj\n+++ b/greet.clj\n@@ -1 +1 @@\n-(greet :world)\n+(greet :everyone)\n",
+                     "diff-decorations":if decorated {json!([{"path":"greet.clj","side":"modified","range":[1,1],"color":"#ffe100"}])} else {json!([])},
+                     "items":[{"id":"review-note","value":{"path":"greet.clj","side":"modified","line":1},"content":{"type":"button","id":"review-resolve","text":"Resolve comment"}}]},
+                    {"type":"hstack","gap":12,"children":[
+                        {"type":"speech-button","id":"voice","speech-id":"review-voice","show-when-unsupported":true,"disabled":true},
+                        {"type":"speech-waveform","id":"voice-waveform","speech-id":"review-voice","width":200,"height":32,"variant":"liquid"},
+                        {"type":"label","text":"Dictation is idle"}
+                    ]},
+                    {"type":"editor","id":"review-source","text":"(defn greet [name]\n  (str \"Hello, \" name))","language":"clojure","height":100,
+                     "gutter-decorations":[{"range":[0,5],"color":"#336699"}],"overview-ruler-decorations":[{"range":[0,5],"color":"#336699","lane":"right"}]}
+                ]
+            })).unwrap();
+            event_tx
+                .send_blocking(protocol::HostEvent::tree(tree, None, vec![]))
+                .unwrap();
+            for _ in 0..3 {
+                cx.run_until_parked();
+                cx.update_window(handle.into(), |_, window, cx| window.render_frame(cx))
+                    .unwrap();
+            }
+            review_images.push(cx.capture_screenshot(handle.into()).unwrap());
+        }
+        assert_ne!(
+            review_images[0], review_images[1],
+            "Diff decoration must affect rendered pixels"
+        );
+        assert!(
+            review_images[1]
+                .pixels()
+                .filter(|p| p.0[..3] == [255, 225, 0])
+                .count()
+                > 100,
+            "the modified Diff line must paint its supplied decoration"
+        );
+        review_images[1]
+            .save("/private/tmp/clj-gpui-kit-090.png")
+            .unwrap();
+
+        println!("rendering: 9 passed (production RootView, Metal)");
     }
 }

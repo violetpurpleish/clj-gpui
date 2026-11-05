@@ -24,7 +24,7 @@
     id))
 
 (def ^:private callback-keys
-  [:on-current-change :on-complete :on-remove :on-retry :on-dismiss :on-token-click :on-content-change :on-reveal :on-text-state :on-missing-glyphs :on-layout-change :on-panel-event :on-click :on-change :on-release :on-submit :on-double-click :on-blur
+  [:on-speech :on-edits :on-token-hover :on-add-annotation :on-current-change :on-complete :on-remove :on-retry :on-dismiss :on-token-click :on-content-change :on-reveal :on-text-state :on-missing-glyphs :on-layout-change :on-panel-event :on-click :on-change :on-release :on-submit :on-double-click :on-blur
    :on-escape :on-close :on-copied :on-ok :on-cancel :on-confirm
    :on-open-change :on-forward-change :on-search :on-query :on-select :on-export
    :on-reset :on-sort :on-load-more :on-link-click :on-hover :on-paste :on-visible-rows :on-visible-columns :on-matched-count])
@@ -45,7 +45,7 @@
   #{:disabled :separator :expanded})
 
 (def ^:private node-boolean-overrides
-  #{:arrow :y-axis :grid-dashed :soft-wrap :folding :line-number :indent-guides :show-whitespaces :hard-tabs :external-link-icon :mdx :checked :interactive :filterable :bordered :focus-ring :open :overlay-closable
+  #{:appear :centered :fixed-size :show-when-unsupported :arrow :y-axis :grid-dashed :soft-wrap :folding :line-number :indent-guides :show-whitespaces :hard-tabs :external-link-icon :mdx :checked :interactive :filterable :bordered :focus-ring :open :overlay-closable
     :autohide :auto-close :smart-indent :label-axis :value-axis :grid :labels :x-axis
     :node-label :value-label :reuse-forward :appearance :content-inset :scrollbar
     :jump-button :scroll-to-end :cell-selectable :row-header :stripe :sortable

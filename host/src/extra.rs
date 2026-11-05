@@ -2029,6 +2029,8 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             }
             bar = bar
                 .interactive(chart_interactive(node))
+                .appear(node.appear.unwrap_or(true))
+                .when_some(node.appear_key.clone(), |chart, key| chart.appear_key(key))
                 .id(SharedString::from(format!("{key}/plot")));
             if let Some(n) = node.band_count {
                 bar = bar.band_count(n);
@@ -2141,6 +2143,8 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             }
             chart = chart
                 .interactive(chart_interactive(node))
+                .appear(node.appear.unwrap_or(true))
+                .when_some(node.appear_key.clone(), |chart, key| chart.appear_key(key))
                 .id(SharedString::from(format!("{key}/plot")))
                 .tooltip_title(chart_tooltip_title);
             chart = chart
@@ -2236,6 +2240,8 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             }
             pie = pie
                 .interactive(chart_interactive(node))
+                .appear(node.appear.unwrap_or(true))
+                .when_some(node.appear_key.clone(), |chart, key| chart.appear_key(key))
                 .id(SharedString::from(format!("{key}/plot")))
                 .tooltip_name(chart_tooltip_title)
                 .tooltip_value(|p, v, _| chart_tooltip_value(p, 0, v as f64));
@@ -2302,6 +2308,8 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             }
             radar = radar
                 .interactive(chart_interactive(node))
+                .appear(node.appear.unwrap_or(true))
+                .when_some(node.appear_key.clone(), |chart, key| chart.appear_key(key))
                 .id(SharedString::from(format!("{key}/plot")))
                 .tooltip_title(chart_tooltip_title)
                 .tooltip_value(chart_tooltip_value)
@@ -2340,6 +2348,8 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             }
             chart = chart
                 .interactive(chart_interactive(node))
+                .appear(node.appear.unwrap_or(true))
+                .when_some(node.appear_key.clone(), |chart, key| chart.appear_key(key))
                 .id(SharedString::from(format!("{key}/plot")))
                 .tooltip_title(chart_tooltip_title);
             chart = chart
@@ -2418,6 +2428,8 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             }
             chart = chart
                 .interactive(chart_interactive(node))
+                .appear(node.appear.unwrap_or(true))
+                .when_some(node.appear_key.clone(), |chart, key| chart.appear_key(key))
                 .id(SharedString::from(format!("{key}/plot")));
             chart = chart
                 .tooltip_name(chart_tooltip_title)
@@ -2455,6 +2467,8 @@ pub fn paint_chart(node: &Node, key: &str, cx: &App) -> gpui::AnyElement {
             }
             chart = chart
                 .interactive(chart_interactive(node))
+                .appear(node.appear.unwrap_or(true))
+                .when_some(node.appear_key.clone(), |chart, key| chart.appear_key(key))
                 .id(SharedString::from(format!("{key}/plot")))
                 .tooltip_title(chart_tooltip_title);
             chart = chart
@@ -2763,6 +2777,8 @@ pub fn paint_markdown_with_state(
     if let Some(format) = &node.selection_format {
         view = view.selection_format(if format == "plain" || format == "plain-text" {
             gpui_component::text::SelectionFormat::Plain
+        } else if format == "source-across-styles" {
+            gpui_component::text::SelectionFormat::SourceAcrossStyles
         } else {
             gpui_component::text::SelectionFormat::Source
         });
